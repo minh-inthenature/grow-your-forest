@@ -4,11 +4,13 @@ A cozy desktop focus timer built with Python & Tkinter. Complete study/focus ses
 
 ## Features
 
-- **Focus Timer & Study Growth**: Watch your active tree evolve across 5 stages — *Seed → Sprout → Small Sapling → Young Tree → Mature Tree* — as you study.
+- **Focus Timer & Study Growth**: Watch your active tree evolve across 6 stages — *Seed → Sprout → Small Sapling → Young Tree → Mature Tree → Flourishing* — as you study.
+- **Task List with Tree Assignment**: Add tasks with an assigned tree species (Cherry Blossom, Pine, Angel Oak, Classic Oak), click any task to focus and auto-sync its tree species, tick off completed tasks, or reassign species anytime.
 - **Living 2D Sanctuary**: Multi-layer distant mountains, rolling hills, winding river, stepping stones, flowers, grass, clouds, and subtle wildlife/particles — with responsive laptop viewport scaling (`800x650` to `1200px+`).
 - **Four Smoothly Transitioning Themes**: Smooth color easing across **Morning**, **Afternoon**, **Night**, and **Chill** modes.
 - **Infinite Ambient Rain Audio**: Continuous seamless looping rain backdrop (`winmm` MCI worker + WPF fallback) with volume control and a smooth 400ms volume fade-in/out on toggle (`user_rain.mp3` + fallback `rain_master.wav`).
-- **Progress, Achievements & JSON Backup**: Local SQLite persistence (`forest_data.db`), daily streak tracking, focus statistics, tree inspection inside **My Forest**, and **Export Forest (`.json`) / Import Backup** right from the **Statistics** view.
+- **Upgraded Statistics & Analytics**: Scrollable analytics dashboard with a 6-card KPI row, editable Daily Goal progress ring, 90-Day Forest Activity Heatmap & Weekly Bar toggle, Study Time by Task, Species Breakdown donut chart, Peak Focus Window badge, clean session log (`Hide 0m sessions` toggle), and **Export Forest (`.json`) / Import Backup**.
+- **My Forest & Achievements**: Local SQLite persistence (`forest_data.db`), daily streak tracking, tree inspection and removal inside **My Forest**, and unlockable achievements.
 
 ---
 

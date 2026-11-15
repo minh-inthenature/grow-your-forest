@@ -388,6 +388,156 @@ def get_daily_data_for_week():
     return result
 
 
+def get_daily_goal_minutes():
+    """Return user's daily study goal in minutes (default 120)."""
+    raw = get_setting("daily_goal_minutes", "120")
+    try:
+        val = int(float(raw))
+    except (TypeError, ValueError):
+        val = 120
+    return max(1, min(1440, val))
+
+
+def set_daily_goal_minutes(minutes):
+    """Persist user's daily study goal in minutes (clamped to 1..1440)."""
+    try:
+        val = int(float(minutes))
+    except (TypeError, ValueError):
+        val = 120
+    val = max(1, min(1440, val))
+    set_setting("daily_goal_minutes", str(val))
+    return val
+
+
+def get_heatmap_data(days=91):
+    """Return daily study totals for the last 91 days (13 weeks x 7 days ending today)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    today = date.today()
+    start_date = today - timedelta(days=days - 1)
+    start_iso = start_date.isoformat()
+
+    day_seconds = {}
+    cursor.execute(
+        "SELECT date, COALESCE(total_seconds, 0) AS total_seconds FROM daily_log WHERE date >= ?",
+        (start_iso,),
+    )
+    for r in cursor.fetchall():
+        day_seconds[r["date"]] = max(day_seconds.get(r["date"], 0.0), float(r["total_seconds"] or 0.0))
+
+    cursor.execute("""
+        SELECT substr(start_time, 1, 10) AS d,
+               COALESCE(SUM(actual_focused_seconds), 0) AS sess_seconds
+        FROM sessions
+        WHERE actual_focused_seconds >= 30 AND substr(start_time, 1, 10) >= ?
+        GROUP BY d
+    """, (start_iso,))
+    for r in cursor.fetchall():
+        d_key = r["d"]
+        if d_key:
+            day_seconds[d_key] = max(day_seconds.get(d_key, 0.0), float(r["sess_seconds"] or 0.0))
+    conn.close()
+
+    result = []
+    for idx in range(days):
+        cur_date = start_date + timedelta(days=idx)
+        iso_str = cur_date.isoformat()
+        secs = day_seconds.get(iso_str, 0.0)
+        result.append({
+            "date": iso_str,
+            "display_date": cur_date.strftime("%b %d, %Y"),
+            "seconds": secs,
+            "minutes": int(secs // 60),
+            "col": idx // 7,
+            "row": idx % 7,
+        })
+    return result
+
+
+def get_species_breakdown():
+    """Return study time and tree count breakdown for each tree species."""
+    species_defs = [
+        ("cherry_blossom", "Cherry Blossom", "#E85D88"),
+        ("pine", "Pine", "#3B7A57"),
+        ("angel_oak", "Angel Oak", "#8C6D46"),
+        ("oak", "Classic Oak", "#688536"),
+    ]
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COALESCE(tree_species, 'oak') AS species,
+               COALESCE(SUM(actual_focused_seconds), 0) AS total_seconds,
+               COUNT(*) AS tree_count
+        FROM sessions
+        WHERE actual_focused_seconds >= 30
+        GROUP BY COALESCE(tree_species, 'oak')
+    """)
+    raw_map = {}
+    for r in cursor.fetchall():
+        sp = r["species"] or "oak"
+        raw_map[sp] = (float(r["total_seconds"] or 0.0), int(r["tree_count"] or 0))
+    conn.close()
+
+    total_all = sum(v[0] for v in raw_map.values())
+    result = []
+    for sp_id, name, color in species_defs:
+        secs, cnt = raw_map.get(sp_id, (0.0, 0))
+        share = (secs / total_all) if total_all > 0 else 0.0
+        result.append({
+            "species": sp_id,
+            "name": name,
+            "color": color,
+            "total_seconds": secs,
+            "minutes": int(secs // 60),
+            "tree_count": cnt,
+            "share": share,
+        })
+    return result
+
+
+def get_peak_focus_window():
+    """Bucket completed sessions into 4 time windows to determine the user's peak focus period."""
+    windows = [
+        ("Morning", "🌅", lambda h: 5 <= h <= 11),
+        ("Afternoon", "☀️", lambda h: 12 <= h <= 16),
+        ("Evening", "🌆", lambda h: 17 <= h <= 20),
+        ("Night", "🌙", lambda h: h >= 21 or h <= 4),
+    ]
+    totals = {name: [0.0, 0] for name, _, _ in windows}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT start_time, actual_focused_seconds
+        FROM sessions
+        WHERE completed = 1 AND actual_focused_seconds > 0
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+
+    valid_count = 0
+    for r in rows:
+        try:
+            dt = datetime.fromisoformat(r["start_time"])
+            hr = dt.hour
+        except Exception:
+            continue
+        secs = float(r["actual_focused_seconds"] or 0.0)
+        for name, _, pred in windows:
+            if pred(hr):
+                totals[name][0] += secs
+                totals[name][1] += 1
+                valid_count += 1
+                break
+
+    if valid_count == 0:
+        return {"window": None, "icon": "⏳", "text": "Peak Focus: Not enough data"}
+
+    best_win = max(totals.keys(), key=lambda k: (totals[k][0], totals[k][1]))
+    win_icon = next(ico for name, ico, _ in windows if name == best_win)
+    return {"window": best_win, "icon": win_icon, "text": f"Peak Focus: {best_win}"}
+
+
 def get_streak():
     """Calculate current daily study streak."""
     conn = get_connection()

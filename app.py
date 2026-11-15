@@ -67,6 +67,76 @@ def get_sprout_svg(color=None):
 </svg>'''
 
 
+def get_heatmap_intensity_level(minutes):
+    """Map daily studied minutes into 5 heatmap intensity buckets (0..4)."""
+    m = max(0, int(minutes))
+    if m == 0:
+        return 0
+    if m < 30:
+        return 1
+    if m < 60:
+        return 2
+    if m < 120:
+        return 3
+    return 4
+
+
+def get_daily_goal_ring_svg(today_minutes, goal_minutes, stroke_color="#5B8FA8", track_color="#E8E2D7"):
+    """Generate a 44x44 pure SVG circular progress ring using stroke-dasharray/stroke-dashoffset."""
+    r = 17.0
+    circ = 2.0 * math.pi * r
+    frac = min(1.0, max(0.0, float(today_minutes) / max(1.0, float(goal_minutes))))
+    offset = circ * (1.0 - frac)
+    pct = int(round(frac * 100))
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" width="44" height="44">'
+        f'<circle cx="22" cy="22" r="{r:.1f}" fill="none" stroke="{track_color}" stroke-width="4.5"/>'
+        f'<circle cx="22" cy="22" r="{r:.1f}" fill="none" stroke="{stroke_color}" stroke-width="4.5" '
+        f'stroke-linecap="round" stroke-dasharray="{circ:.2f}" stroke-dashoffset="{offset:.2f}" '
+        f'transform="rotate(-90 22 22)"/>'
+        f'<text x="22" y="25" text-anchor="middle" font-size="9" font-weight="700" fill="{stroke_color}">{pct}%</text>'
+        f'</svg>'
+    )
+
+
+def get_species_donut_svg(breakdown, empty_color="#E8E2D7", text_color="#6D776E"):
+    """Generate a pure SVG stroke-dasharray donut chart for forest species breakdown."""
+    r = 44.0
+    circ = 2.0 * math.pi * r
+    total_secs = sum(item.get("total_seconds", 0.0) for item in (breakdown or []))
+    if total_secs <= 0:
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 124 124" width="124" height="124">'
+            f'<circle cx="62" cy="62" r="{r:.1f}" fill="none" stroke="{empty_color}" stroke-width="14"/>'
+            f'<text x="62" y="65" text-anchor="middle" font-size="9" fill="{text_color}">No trees planted yet</text>'
+            f'</svg>'
+        )
+
+    circles = []
+    offset = 0.0
+    for item in breakdown:
+        share = item.get("share", 0.0)
+        if share <= 0:
+            continue
+        seg_len = share * circ
+        col = item.get("color", "#688536")
+        circles.append(
+            f'<circle cx="62" cy="62" r="{r:.1f}" fill="none" stroke="{col}" stroke-width="14" '
+            f'stroke-dasharray="{seg_len:.2f} {circ:.2f}" stroke-dashoffset="{-offset:.2f}" '
+            f'transform="rotate(-90 62 62)"/>'
+        )
+        offset += seg_len
+
+    total_mins = int(total_secs // 60)
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 124 124" width="124" height="124">'
+        f'<circle cx="62" cy="62" r="{r:.1f}" fill="none" stroke="{empty_color}" stroke-width="14"/>'
+        f'{"".join(circles)}'
+        f'<text x="62" y="65" text-anchor="middle" font-size="11" font-weight="700" fill="{text_color}">{total_mins}m</text>'
+        f'</svg>'
+    )
+
+
 THEMES = {
     "morning": {
         "id": "morning",
@@ -441,6 +511,10 @@ class GrowYourForestApp:
                 self.selected_species = t_active["tree_species"]
         self._task_popover = None
         self._task_tooltip = None
+        self.daily_goal_minutes = db.get_daily_goal_minutes()
+        self.stats_activity_mode = "both"
+        self.hide_zero_min_sessions = True
+        self._stats_tooltip = None
         self.forest_filter_species = "all"
 
         # ── Water drop animation state ──
@@ -1144,6 +1218,10 @@ class GrowYourForestApp:
         cmd()
 
     def _clear_content(self):
+        self._close_task_popover()
+        self._hide_task_tooltip()
+        self._hide_stats_tooltip()
+        self._dismiss_forest_popup()
         for w in self.content_frame.winfo_children():
             w.destroy()
 
@@ -2876,11 +2954,297 @@ class GrowYourForestApp:
 
     # ──────────────── Statistics View ────────────────
 
+    def _hide_stats_tooltip(self):
+        if getattr(self, "_stats_tooltip", None) is not None:
+            try:
+                if self._stats_tooltip.winfo_exists():
+                    self._stats_tooltip.destroy()
+            except Exception:
+                pass
+            self._stats_tooltip = None
+
+    def _show_stats_tooltip(self, widget, text, x_root, y_root):
+        self._hide_stats_tooltip()
+        tip = tk.Toplevel(self.root)
+        tip.overrideredirect(True)
+        tip.configure(bg=THEME["border"], padx=1, pady=1)
+        try:
+            tip.attributes("-topmost", True)
+        except Exception:
+            pass
+        lbl = tk.Label(
+            tip, text=text, font=self.font_xs_bold,
+            bg=THEME["bg_card"], fg=THEME["fg"], padx=8, pady=4
+        )
+        lbl.pack()
+        tip.update_idletasks()
+        px = x_root + 10
+        py = y_root - tip.winfo_reqheight() - 8
+        sw = self.root.winfo_screenwidth()
+        if px + tip.winfo_reqwidth() > sw - 8:
+            px = max(8, x_root - tip.winfo_reqwidth() - 8)
+        if py < 8:
+            py = y_root + 12
+        tip.geometry(f"+{px}+{py}")
+        self._stats_tooltip = tip
+
+    def _set_stats_activity_mode(self, mode):
+        if mode in ("week", "heatmap", "both") and self.stats_activity_mode != mode:
+            self.stats_activity_mode = mode
+            self._show_stats_view()
+
+    def _toggle_hide_zero_sessions(self):
+        self.hide_zero_min_sessions = not self.hide_zero_min_sessions
+        self._show_stats_view()
+
+    def _edit_daily_goal_inline(self, holder):
+        """Replace goal label inline with a numeric entry to edit dailyGoalMinutes."""
+        if not holder.winfo_exists():
+            return
+        for w in holder.winfo_children():
+            w.destroy()
+
+        entry = tk.Entry(
+            holder, width=5, font=self.font_xs_bold,
+            bg=THEME["bg_dark"], fg=THEME["fg"], insertbackground=THEME["fg"],
+            relief="flat", highlightthickness=1, highlightbackground=THEME["accent"]
+        )
+        entry.insert(0, str(self.daily_goal_minutes))
+        entry.select_range(0, "end")
+        entry.pack(side="left")
+        tk.Label(
+            holder, text="m", font=self.font_xs,
+            fg=THEME["fg_muted"], bg=THEME["bg_card"]
+        ).pack(side="left", padx=(2, 0))
+
+        saved = {"done": False}
+
+        def _commit(e=None):
+            if saved["done"]:
+                return
+            saved["done"] = True
+            try:
+                raw = entry.get().strip()
+                if raw:
+                    val = int(float(raw))
+                    self.daily_goal_minutes = db.set_daily_goal_minutes(val)
+            except (TypeError, ValueError, tk.TclError):
+                pass
+            if self.current_view == "stats":
+                self._show_stats_view()
+
+        entry.bind("<Return>", _commit)
+        entry.bind("<FocusOut>", _commit)
+        entry.bind("<Escape>", lambda e: (saved.__setitem__("done", True), self._show_stats_view()))
+        entry.focus_set()
+
+    def _draw_goal_ring_canvas(self, canvas, today_minutes, goal_minutes, ring_color):
+        """Draw the compact 44x44 circular daily goal progress ring."""
+        try:
+            canvas.delete("all")
+            track = THEME["bg_dark"]
+            canvas.create_oval(4, 4, 40, 40, outline=track, width=4.5)
+            frac = min(1.0, max(0.0, float(today_minutes) / max(1.0, float(goal_minutes))))
+            if frac > 0:
+                if frac >= 0.999:
+                    canvas.create_oval(4, 4, 40, 40, outline=ring_color, width=4.5)
+                else:
+                    extent = -frac * 360.0
+                    canvas.create_arc(
+                        4, 4, 40, 40, start=90, extent=extent,
+                        style="arc", outline=ring_color, width=4.5
+                    )
+            pct = int(round(frac * 100))
+            canvas.create_text(
+                22, 22, text=f"{pct}%", font=(self.family_mono, 8, "bold"),
+                fill=ring_color
+            )
+        except tk.TclError:
+            pass
+
+    def _draw_heatmap_grid(self, canvas, heatmap_data):
+        """Draw a 13 columns x 7 rows (91 days up to today) GitHub-style activity heatmap."""
+        try:
+            w = canvas.winfo_width()
+            if w < 100:
+                self.root.after(80, lambda: self._draw_heatmap_grid(canvas, heatmap_data))
+                return
+            canvas.delete("all")
+
+            cols = 13
+            rows = 7
+            cell = 12
+            gap = 4
+            step = cell + gap
+            grid_w = cols * step - gap
+            grid_h = rows * step - gap
+
+            left_lbl_w = 28
+            total_w = left_lbl_w + grid_w
+            x0 = max(16, (w - total_w) // 2 + left_lbl_w)
+            y0 = 18
+
+            # Color ramp: 5 levels of active theme's primary accent
+            base = THEME["bg_dark"]
+            acc = THEME["accent"]
+            level_colors = [
+                base,
+                scenery.mix(base, acc, 0.30),
+                scenery.mix(base, acc, 0.52),
+                scenery.mix(base, acc, 0.76),
+                acc,
+            ]
+
+            # Subtle day-of-week hints (show every other row cleanly)
+            if heatmap_data:
+                for r in range(rows):
+                    if r in (0, 2, 4, 6):
+                        sample = heatmap_data[r]
+                        try:
+                            d_short = datetime.fromisoformat(sample["date"]).strftime("%a")[:2]
+                        except Exception:
+                            d_short = ""
+                        canvas.create_text(
+                            x0 - 8, y0 + r * step + cell / 2,
+                            text=d_short, font=(self.family_sans, 7),
+                            fill=THEME["fg_light"], anchor="e"
+                        )
+
+            # Month header markers above columns when month starts
+            last_month = None
+            for col in range(cols):
+                idx = col * rows
+                if idx < len(heatmap_data):
+                    try:
+                        dt_col = datetime.fromisoformat(heatmap_data[idx]["date"])
+                        m_lbl = dt_col.strftime("%b")
+                        if m_lbl != last_month:
+                            canvas.create_text(
+                                x0 + col * step, y0 - 9,
+                                text=m_lbl, font=(self.family_sans, 8),
+                                fill=THEME["fg_muted"], anchor="w"
+                            )
+                            last_month = m_lbl
+                    except Exception:
+                        pass
+
+            cell_boxes = []
+            for entry in heatmap_data:
+                c = entry["col"]
+                r = entry["row"]
+                mins = entry["minutes"]
+                lvl = get_heatmap_intensity_level(mins)
+                fill_c = level_colors[lvl]
+                cx0 = x0 + c * step
+                cy0 = y0 + r * step
+                cx1 = cx0 + cell
+                cy1 = cy0 + cell
+                pts = _rounded_rect_pts(cx0, cy0, cx1, cy1, 3)
+                is_today = (entry["date"] == date.today().isoformat())
+                outline_c = THEME["fg_muted"] if is_today else ""
+                canvas.create_polygon(
+                    pts, smooth=True, fill=fill_c, outline=outline_c,
+                    width=1 if is_today else 0
+                )
+                tip_txt = f"{entry['display_date']}: {mins} min" + ("" if mins == 1 else "s")
+                cell_boxes.append((cx0, cy0, cx1, cy1, tip_txt))
+
+            # Legend ("Less [][][][][] More") below bottom-right of grid
+            ly = y0 + grid_h + 12
+            lx = x0 + grid_w - 5 * 14 - 36
+            canvas.create_text(lx - 6, ly + 5, text="Less", font=(self.family_sans, 7), fill=THEME["fg_light"], anchor="e")
+            for k, col_hex in enumerate(level_colors):
+                bx0 = lx + k * 14
+                canvas.create_polygon(
+                    _rounded_rect_pts(bx0, ly, bx0 + 10, ly + 10, 2),
+                    smooth=True, fill=col_hex, outline=""
+                )
+            canvas.create_text(lx + 5 * 14 + 4, ly + 5, text="More", font=(self.family_sans, 7), fill=THEME["fg_light"], anchor="w")
+
+            canvas._heatmap_boxes = cell_boxes
+            canvas._last_hover_idx = None
+
+            def _on_motion(e):
+                hit_idx = None
+                for i, (bx0, by0, bx1, by1, tip_txt) in enumerate(canvas._heatmap_boxes):
+                    if bx0 <= e.x <= bx1 and by0 <= e.y <= by1:
+                        hit_idx = i
+                        if canvas._last_hover_idx != i:
+                            canvas._last_hover_idx = i
+                            self._show_stats_tooltip(canvas, tip_txt, e.x_root, e.y_root)
+                        break
+                if hit_idx is None and canvas._last_hover_idx is not None:
+                    canvas._last_hover_idx = None
+                    self._hide_stats_tooltip()
+
+            def _on_leave(e):
+                canvas._last_hover_idx = None
+                self._hide_stats_tooltip()
+
+            canvas.bind("<Motion>", _on_motion)
+            canvas.bind("<Leave>", _on_leave)
+        except tk.TclError:
+            pass
+
+    def _draw_species_donut_canvas(self, canvas, breakdown):
+        """Draw the Forest Species Breakdown donut chart mirroring get_species_donut_svg."""
+        try:
+            canvas.delete("all")
+            w = 124
+            h = 124
+            cx, cy = w / 2, h / 2
+            pad = 14
+            x0, y0, x1, y1 = pad, pad, w - pad, h - pad
+            track_col = THEME["bg_dark"]
+
+            total_secs = sum(item.get("total_seconds", 0.0) for item in (breakdown or []))
+            canvas.create_oval(x0, y0, x1, y1, outline=track_col, width=14)
+
+            if total_secs <= 0:
+                canvas.create_text(
+                    cx, cy, text="No trees\nplanted yet",
+                    font=(self.family_sans, 8), fill=THEME["fg_light"], justify="center"
+                )
+                return
+
+            non_zero = [item for item in breakdown if item.get("total_seconds", 0.0) > 0]
+            if len(non_zero) == 1:
+                canvas.create_oval(x0, y0, x1, y1, outline=non_zero[0]["color"], width=14)
+            else:
+                start_deg = 90.0
+                for item in non_zero:
+                    extent_deg = -(item["share"] * 360.0)
+                    if abs(extent_deg) < 0.5:
+                        continue
+                    canvas.create_arc(
+                        x0, y0, x1, y1,
+                        start=start_deg, extent=extent_deg,
+                        style="arc", outline=item["color"], width=14
+                    )
+                    start_deg += extent_deg
+
+            total_mins = int(total_secs // 60)
+            canvas.create_text(
+                cx, cy - 5, text=f"{total_mins}m",
+                font=(self.family_mono, 10, "bold"), fill=THEME["fg"]
+            )
+            canvas.create_text(
+                cx, cy + 9, text="total",
+                font=(self.family_sans, 7), fill=THEME["fg_muted"]
+            )
+        except tk.TclError:
+            pass
+
     def _show_stats_view(self):
         self.current_view = "stats"
         self._clear_content()
+        self.daily_goal_minutes = db.get_daily_goal_minutes()
 
-        # Scrollable frame
+        vw, _ = self._get_viewport_size()
+        mode = self._get_responsive_mode()
+        is_compact = (mode == "compact")
+
+        # Scrollable container so the bottom navigation bar is never pushed off-screen
         canvas = tk.Canvas(self.content_frame, bg=THEME["bg"], highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.content_frame, orient="vertical", command=canvas.yview)
         scroll_frame = tk.Frame(canvas, bg=THEME["bg"])
@@ -2900,7 +3264,6 @@ class GrowYourForestApp:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Bind mousewheel (scoped to this canvas, cleaned up on destroy)
         def _on_mousewheel(e):
             try:
                 canvas.yview_scroll(-1 * (e.delta // 120), "units")
@@ -2908,16 +3271,22 @@ class GrowYourForestApp:
                 pass
 
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        canvas.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        canvas.bind("<Destroy>", lambda e: (canvas.unbind_all("<MouseWheel>"), self._hide_stats_tooltip()))
 
-        # Header + subtle JSON Backup buttons
-        stats_hdr = tk.Frame(scroll_frame, bg=THEME["bg"])
-        stats_hdr.pack(fill="x", pady=(0, 15))
+        stats_wrap = tk.Frame(
+            scroll_frame, bg=THEME["bg"],
+            padx=12 if is_compact else 20, pady=8
+        )
+        stats_wrap.pack(fill="both", expand=True)
+
+        # ── Header + Peak Focus Window Badge + JSON Backup buttons ──
+        stats_hdr = tk.Frame(stats_wrap, bg=THEME["bg"])
+        stats_hdr.pack(fill="x", pady=(0, 14))
 
         tk.Label(
             stats_hdr, text="📊 Statistics",
             font=self.font_title, fg=THEME["green_dark"], bg=THEME["bg"]
-        ).pack(side="left", anchor="w")
+        ).pack(side="left", anchor="center")
 
         backup_bar = tk.Frame(stats_hdr, bg=THEME["bg"])
         backup_bar.pack(side="right", anchor="e")
@@ -2925,18 +3294,30 @@ class GrowYourForestApp:
         self.import_backup_btn = self._make_secondary_button(
             backup_bar, "📥 Import Backup", self._import_forest_backup
         )
-        self.import_backup_btn.pack(side="right", padx=(8, 0))
+        self.import_backup_btn.pack(side="right", padx=(6 if is_compact else 8, 0))
 
         self.export_backup_btn = self._make_secondary_button(
             backup_bar, "📤 Export Forest (.json)", self._export_forest_json
         )
         self.export_backup_btn.pack(side="right")
 
-        # ── Summary cards ──
-        cards = tk.Frame(scroll_frame, bg=THEME["bg"])
-        cards.pack(fill="x", pady=(0, 20))
+        peak = db.get_peak_focus_window()
+        self.peak_focus_badge = tk.Label(
+            stats_hdr, text=f"{peak['icon']} {peak['text']}",
+            font=self.font_xs_bold,
+            bg=THEME["accent_light"], fg=THEME["green_dark"],
+            padx=8 if is_compact else 10, pady=4,
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        self.peak_focus_badge.pack(side="right", padx=(0, 8))
+
+        # ── Compact 6-Card KPI Row & Editable Daily Goal Ring ──
+        cards = tk.Frame(stats_wrap, bg=THEME["bg"])
+        cards.pack(fill="x", pady=(0, 16))
+        self.stats_kpi_frame = cards
 
         today_secs = db.get_today_seconds()
+        today_mins = int(today_secs // 60)
         weekly_secs = db.get_weekly_seconds()
         total_secs = db.get_total_focused_seconds()
         total_trees = db.get_total_trees()
@@ -2952,94 +3333,297 @@ class GrowYourForestApp:
             ("Streak", f"{streak}d", "🔥", THEME["streak_fire"]),
         ]
 
+        kpi_cols = 6 if vw >= 960 else 3
+        for col_idx in range(kpi_cols):
+            cards.columnconfigure(col_idx, weight=1, uniform="kpi_col")
+
+        self.daily_goal_ring_svg = get_daily_goal_ring_svg(
+            today_mins, self.daily_goal_minutes, THEME["blue_soft"], THEME["bg_dark"]
+        )
+
+        self.stats_kpi_cards = []
         for i, (label, value, icon, color) in enumerate(card_data):
-            card = tk.Frame(cards, bg=THEME["bg_card"],
-                            highlightbackground=THEME["border"], highlightthickness=1)
-            card.grid(row=i // 3, column=i % 3, padx=5, pady=5, sticky="nsew")
-            cards.columnconfigure(i % 3, weight=1)
+            r_idx = i // kpi_cols
+            c_idx = i % kpi_cols
+            card = tk.Frame(
+                cards, bg=THEME["bg_card"],
+                highlightbackground=THEME["border"], highlightthickness=1
+            )
+            card.grid(row=r_idx, column=c_idx, padx=5, pady=5, sticky="nsew")
+            self.stats_kpi_cards.append(card)
 
             inner = tk.Frame(card, bg=THEME["bg_card"])
-            inner.pack(fill="x", padx=15, pady=12)
+            inner.pack(fill="both", expand=True, padx=14, pady=12)
 
-            tk.Label(inner, text=icon, font=self.font_emoji, bg=THEME["bg_card"]).pack(anchor="w")
-            tk.Label(inner, text=value, font=self.font_stat_num,
-                     fg=color, bg=THEME["bg_card"]).pack(anchor="w")
-            tk.Label(inner, text=label, font=self.font_stat_label,
-                     fg=THEME["fg_muted"], bg=THEME["bg_card"]).pack(anchor="w")
+            if i == 0:
+                # Today card with 44x44 circular progress ring + inline-editable Goal
+                top_kpi = tk.Frame(inner, bg=THEME["bg_card"])
+                top_kpi.pack(fill="x")
 
-        # ── Weekly chart ──
-        chart_frame = tk.Frame(scroll_frame, bg=THEME["bg_card"],
-                               highlightbackground=THEME["border"], highlightthickness=1)
-        chart_frame.pack(fill="x", pady=(0, 20))
+                left_kpi = tk.Frame(top_kpi, bg=THEME["bg_card"])
+                left_kpi.pack(side="left", fill="both", expand=True)
+                tk.Label(left_kpi, text=icon, font=self.font_emoji, bg=THEME["bg_card"]).pack(anchor="w")
+                tk.Label(
+                    left_kpi, text=value, font=self.font_stat_inline if kpi_cols == 6 else self.font_stat_num,
+                    fg=color, bg=THEME["bg_card"]
+                ).pack(anchor="w")
+                tk.Label(
+                    left_kpi, text=label, font=self.font_stat_label,
+                    fg=THEME["fg_muted"], bg=THEME["bg_card"]
+                ).pack(anchor="w")
+
+                ring_cv = tk.Canvas(
+                    top_kpi, width=44, height=44, bg=THEME["bg_card"], highlightthickness=0
+                )
+                ring_cv.pack(side="right", anchor="ne", padx=(4, 0))
+                self.daily_goal_ring_canvas = ring_cv
+                self._draw_goal_ring_canvas(ring_cv, today_mins, self.daily_goal_minutes, color)
+
+                goal_holder = tk.Frame(inner, bg=THEME["bg_card"])
+                goal_holder.pack(fill="x", pady=(4, 0))
+                self.daily_goal_label = tk.Label(
+                    goal_holder, text=f"Goal: {self.daily_goal_minutes}m ✏️",
+                    font=self.font_xs, fg=THEME["fg_muted"], bg=THEME["bg_card"],
+                    cursor="hand2", anchor="w"
+                )
+                self.daily_goal_label.pack(side="left")
+                self.daily_goal_label.bind(
+                    "<Button-1>", lambda e, h=goal_holder: self._edit_daily_goal_inline(h)
+                )
+                self.daily_goal_label.bind(
+                    "<Enter>", lambda e: self.daily_goal_label.configure(fg=THEME["accent"])
+                )
+                self.daily_goal_label.bind(
+                    "<Leave>", lambda e: self.daily_goal_label.configure(fg=THEME["fg_muted"])
+                )
+            else:
+                tk.Label(inner, text=icon, font=self.font_emoji, bg=THEME["bg_card"]).pack(anchor="w")
+                tk.Label(
+                    inner, text=value, font=self.font_stat_inline if kpi_cols == 6 else self.font_stat_num,
+                    fg=color, bg=THEME["bg_card"]
+                ).pack(anchor="w")
+                tk.Label(
+                    inner, text=label, font=self.font_stat_label,
+                    fg=THEME["fg_muted"], bg=THEME["bg_card"]
+                ).pack(anchor="w")
+
+        # ── 90-Day Forest Activity Heatmap & Weekly Bar Toggle ──
+        activity_card = tk.Frame(
+            stats_wrap, bg=THEME["bg_card"],
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        activity_card.pack(fill="x", pady=(0, 16))
+
+        act_hdr = tk.Frame(activity_card, bg=THEME["bg_card"])
+        act_hdr.pack(fill="x", padx=20, pady=(14, 10))
+
+        act_title = "📈 This Week & 90-Day Activity" if self.stats_activity_mode == "both" else (
+            "🟩 90-Day Forest Activity Heatmap" if self.stats_activity_mode == "heatmap" else "📈 This Week"
+        )
+        tk.Label(
+            act_hdr, text=act_title,
+            font=self.font_section, fg=THEME["fg"], bg=THEME["bg_card"]
+        ).pack(side="left", anchor="center")
+
+        toggle_bar = tk.Frame(
+            act_hdr, bg=THEME["border"], padx=1, pady=1
+        )
+        toggle_bar.pack(side="right", anchor="center")
+        self.activity_toggle_buttons = {}
+        for m_id, m_label in [("week", "This Week"), ("heatmap", "90-Day Heatmap"), ("both", "Both")]:
+            is_act = (self.stats_activity_mode == m_id)
+            t_btn = tk.Label(
+                toggle_bar, text=m_label, font=self.font_xs_bold,
+                bg=THEME["accent"] if is_act else THEME["bg_dark"],
+                fg=THEME.get("accent_fg", "#FFFFFF") if is_act else THEME["fg_muted"],
+                padx=9, pady=4, cursor="hand2"
+            )
+            t_btn.pack(side="left", padx=1)
+            t_btn.bind("<Button-1>", lambda e, mid=m_id: self._set_stats_activity_mode(mid))
+            self.activity_toggle_buttons[m_id] = t_btn
+
+        if self.stats_activity_mode in ("heatmap", "both"):
+            heatmap_data = db.get_heatmap_data(days=91)
+            self.heatmap_data = heatmap_data
+            hm_canvas = tk.Canvas(
+                activity_card, bg=THEME["bg_card"], highlightthickness=0, height=156
+            )
+            hm_canvas.pack(fill="x", padx=20, pady=(0, 8))
+            self.heatmap_canvas = hm_canvas
+            hm_canvas.bind("<Configure>", lambda e, d=heatmap_data: self._draw_heatmap_grid(hm_canvas, d))
+            self.root.after(80, lambda d=heatmap_data: self._draw_heatmap_grid(hm_canvas, d))
+        else:
+            self.heatmap_canvas = None
+
+        if self.stats_activity_mode in ("week", "both"):
+            chart_canvas = tk.Canvas(
+                activity_card, bg=THEME["bg_card"], highlightthickness=0, height=168
+            )
+            chart_canvas.pack(fill="x", padx=20, pady=(0, 14))
+            self.weekly_chart_canvas = chart_canvas
+            chart_canvas.bind("<Configure>", lambda e: self._draw_weekly_chart(chart_canvas))
+            self.root.after(100, lambda: self._draw_weekly_chart(chart_canvas))
+        else:
+            self.weekly_chart_canvas = None
+
+        # ── Two-Column Breakdown: Study Time by Task (1.4fr) & Species Donut Chart (1fr) ──
+        breakdown_row = tk.Frame(stats_wrap, bg=THEME["bg"])
+        breakdown_row.pack(fill="x", pady=(0, 16))
+        self.stats_breakdown_row = breakdown_row
+
+        if vw >= 780:
+            breakdown_row.columnconfigure(0, weight=14, uniform="bd_col")
+            breakdown_row.columnconfigure(1, weight=10, uniform="bd_col")
+            task_grid_kw = {"row": 0, "column": 0, "padx": (0, 8), "sticky": "nsew"}
+            species_grid_kw = {"row": 0, "column": 1, "padx": (8, 0), "sticky": "nsew"}
+        else:
+            breakdown_row.columnconfigure(0, weight=1)
+            task_grid_kw = {"row": 0, "column": 0, "pady": (0, 12), "sticky": "nsew"}
+            species_grid_kw = {"row": 1, "column": 0, "sticky": "nsew"}
+
+        # Left Column: Study Time by Task
+        task_card = tk.Frame(
+            breakdown_row, bg=THEME["bg_card"],
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        task_card.grid(**task_grid_kw)
 
         tk.Label(
-            chart_frame, text="📈 This Week",
+            task_card, text="🎯 Study Time by Task",
             font=self.font_section, fg=THEME["fg"], bg=THEME["bg_card"]
-        ).pack(anchor="w", padx=20, pady=(15, 10))
+        ).pack(anchor="w", padx=18, pady=(14, 10))
 
-        chart_canvas = tk.Canvas(
-            chart_frame, bg=THEME["bg_card"], highlightthickness=0, height=180
-        )
-        chart_canvas.pack(fill="x", padx=20, pady=(0, 15))
-        chart_canvas.bind("<Configure>", lambda e: self._draw_weekly_chart(chart_canvas))
-
-        self.root.after(100, lambda: self._draw_weekly_chart(chart_canvas))
-
-        # ── Time by Task Breakdown ──
         task_stats = db.get_task_stats()
-        if task_stats:
-            task_card = tk.Frame(scroll_frame, bg=THEME["bg_card"],
-                                 highlightbackground=THEME["border"], highlightthickness=1)
-            task_card.pack(fill="x", pady=(0, 20))
-
+        if not task_stats:
             tk.Label(
-                task_card, text="🎯 Study Time by Task",
-                font=self.font_section, fg=THEME["fg"], bg=THEME["bg_card"]
-            ).pack(anchor="w", padx=20, pady=(15, 10))
-
-            max_task_sec = max(t["total_seconds"] for t in task_stats) if task_stats else 1
-            if max_task_sec <= 0:
-                max_task_sec = 1
-
+                task_card, text="Complete a focus session to see study breakdown by task.",
+                font=self.font_small, fg=THEME["fg_light"], bg=THEME["bg_card"],
+                wraplength=260, justify="left"
+            ).pack(anchor="w", padx=18, pady=(4, 16))
+        else:
+            max_task_sec = max(t["total_seconds"] for t in task_stats) or 1
             for t in task_stats[:7]:
                 t_row = tk.Frame(task_card, bg=THEME["bg_card"])
-                t_row.pack(fill="x", padx=20, pady=5)
+                t_row.pack(fill="x", padx=18, pady=4)
 
+                t_title = t["task"]
+                if len(t_title) > 18:
+                    t_title = t_title[:17].rstrip() + "…"
                 tk.Label(
-                    t_row, text=f"• {t['task']}", font=self.font_body,
+                    t_row, text=f"• {t_title}", font=self.font_small,
                     fg=THEME["fg"], bg=THEME["bg_card"], width=16, anchor="w"
                 ).pack(side="left")
 
-                bar_c = tk.Frame(t_row, bg=THEME["bg_dark"], height=12)
-                bar_c.pack(side="left", fill="x", expand=True, padx=10)
+                bar_c = tk.Frame(t_row, bg=THEME["bg_dark"], height=10)
+                bar_c.pack(side="left", fill="x", expand=True, padx=8)
                 bar_c.pack_propagate(False)
 
                 frac = min(1.0, t["total_seconds"] / max_task_sec)
-                tk.Frame(bar_c, bg=THEME["accent"], height=12).place(relx=0, rely=0, relwidth=max(0.02, frac), relheight=1)
+                tk.Frame(bar_c, bg=THEME["accent"], height=10).place(
+                    relx=0, rely=0, relwidth=max(0.03, frac), relheight=1
+                )
 
                 hrs_str = self._format_hours(t["total_seconds"])
                 cnt_str = f"{t['tree_count']} tree" + ("s" if t["tree_count"] != 1 else "")
                 tk.Label(
-                    t_row, text=f"{hrs_str} ({cnt_str})", font=(self.family_mono, 9),
-                    fg=THEME["fg_muted"], bg=THEME["bg_card"], width=15, anchor="e"
+                    t_row, text=f"{hrs_str} ({cnt_str})", font=(self.family_mono, 8),
+                    fg=THEME["fg_muted"], bg=THEME["bg_card"], anchor="e"
                 ).pack(side="right")
 
             tk.Frame(task_card, bg=THEME["bg_card"], height=12).pack()
 
-        # ── Recent sessions ──
-        recent_frame = tk.Frame(scroll_frame, bg=THEME["bg_card"],
-                                highlightbackground=THEME["border"], highlightthickness=1)
-        recent_frame.pack(fill="x", pady=(0, 18))
+        # Right Column: Forest Species Breakdown Donut Chart
+        species_card = tk.Frame(
+            breakdown_row, bg=THEME["bg_card"],
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        species_card.grid(**species_grid_kw)
 
         tk.Label(
-            recent_frame, text="📋 Recent Sessions",
+            species_card, text="🌲 Species Breakdown",
             font=self.font_section, fg=THEME["fg"], bg=THEME["bg_card"]
-        ).pack(anchor="w", padx=20, pady=(15, 10))
+        ).pack(anchor="w", padx=18, pady=(14, 10))
 
-        sessions = db.get_all_sessions()[:10]
-        if not sessions:
+        breakdown = db.get_species_breakdown()
+        self.species_breakdown_data = breakdown
+        self.species_donut_svg = get_species_donut_svg(breakdown, THEME["bg_dark"], THEME["fg_muted"])
+
+        sp_body = tk.Frame(species_card, bg=THEME["bg_card"])
+        sp_body.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+
+        donut_cv = tk.Canvas(
+            sp_body, width=124, height=124, bg=THEME["bg_card"], highlightthickness=0
+        )
+        donut_cv.pack(side="left", anchor="center", padx=(0, 12))
+        self.species_donut_canvas = donut_cv
+        self._draw_species_donut_canvas(donut_cv, breakdown)
+
+        legend_box = tk.Frame(sp_body, bg=THEME["bg_card"])
+        legend_box.pack(side="left", fill="both", expand=True, anchor="center")
+
+        total_sp_secs = sum(item["total_seconds"] for item in breakdown)
+        if total_sp_secs <= 0:
             tk.Label(
-                recent_frame, text="No sessions yet. Start studying! 🌱",
+                legend_box, text="No trees planted yet",
+                font=self.font_small_bold, fg=THEME["fg_muted"], bg=THEME["bg_card"], anchor="w"
+            ).pack(anchor="w", pady=(0, 4))
+
+        for item in breakdown:
+            l_row = tk.Frame(legend_box, bg=THEME["bg_card"])
+            l_row.pack(fill="x", pady=3)
+            tk.Frame(l_row, bg=item["color"], width=10, height=10).pack(side="left", padx=(0, 6))
+            tk.Label(
+                l_row, text=item["name"], font=self.font_xs_bold,
+                fg=THEME["fg"], bg=THEME["bg_card"], anchor="w"
+            ).pack(side="left")
+            pct = int(round(item["share"] * 100)) if total_sp_secs > 0 else 0
+            val_txt = f"{item['minutes']}m ({pct}%) • {item['tree_count']}"
+            tk.Label(
+                l_row, text=val_txt, font=(self.family_mono, 8),
+                fg=THEME["fg_muted"], bg=THEME["bg_card"], anchor="e"
+            ).pack(side="right")
+
+        # ── Clean Recent Sessions Log (filters out 0m sessions by default) ──
+        recent_frame = tk.Frame(
+            stats_wrap, bg=THEME["bg_card"],
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        recent_frame.pack(fill="x", pady=(0, 18))
+
+        recent_hdr = tk.Frame(recent_frame, bg=THEME["bg_card"])
+        recent_hdr.pack(fill="x", padx=20, pady=(14, 10))
+
+        tk.Label(
+            recent_hdr, text="📋 Recent Sessions",
+            font=self.font_section, fg=THEME["fg"], bg=THEME["bg_card"]
+        ).pack(side="left", anchor="w")
+
+        chk_txt = ("☑ Hide 0m sessions" if self.hide_zero_min_sessions else "☐ Hide 0m sessions")
+        self.hide_zero_sessions_btn = tk.Label(
+            recent_hdr, text=chk_txt, font=self.font_xs_bold,
+            bg=THEME["bg_dark"], fg=THEME["fg_muted"],
+            padx=8, pady=3, cursor="hand2",
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        self.hide_zero_sessions_btn.pack(side="right", anchor="e")
+        self.hide_zero_sessions_btn.bind("<Button-1>", lambda e: self._toggle_hide_zero_sessions())
+
+        all_sessions = db.get_all_sessions()
+        if self.hide_zero_min_sessions:
+            sessions = [
+                s for s in all_sessions
+                if s.get("completed") == 1 and int(s.get("actual_focused_seconds", 0) // 60) > 0
+            ][:10]
+        else:
+            sessions = all_sessions[:10]
+
+        if not sessions:
+            empty_msg = (
+                "No completed sessions (> 0m) yet. Start studying! 🌱"
+                if self.hide_zero_min_sessions else "No sessions yet. Start studying! 🌱"
+            )
+            tk.Label(
+                recent_frame, text=empty_msg,
                 font=self.font_body, fg=THEME["fg_muted"], bg=THEME["bg_card"]
             ).pack(padx=20, pady=(0, 15))
         else:
@@ -3114,6 +3698,7 @@ class GrowYourForestApp:
             return None
         try:
             summary = db.import_from_json_file(filepath)
+            self.daily_goal_minutes = db.get_daily_goal_minutes()
             saved_theme = db.get_setting("theme", self.current_theme)
             if saved_theme in THEMES and saved_theme != self.current_theme:
                 self._set_theme(saved_theme)
