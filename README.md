@@ -5,14 +5,10 @@ A cozy desktop focus timer built with Python & Tkinter. Complete study/focus ses
 ## Features
 
 - **Focus Timer & Study Growth**: Watch your active tree evolve across 5 stages — *Seed → Sprout → Small Sapling → Young Tree → Mature Tree* — as you study.
-- **Living 2D Sanctuary**: Multi-layer distant mountains, rolling hills, winding river, stepping stones, flowers, grass, clouds, and subtle wildlife/particles.
-- **Four Themes**:
-  - **Morning**: Crisp meadow light and fresh morning sky
-  - **Afternoon**: Golden-hour warmth
-  - **Night**: Starry twilight with fireflies and dark indigo UI
-  - **Chill**: Cozy, darker roasted-cocoa & warm dusk atmosphere
-- **Ambient Rain Audio**: Continuous seamless looping rain backdrop with volume control (`user_rain.mp3` + fallback `rain_master.wav`).
-- **Progress & Achievements**: Local SQLite persistence (`forest_data.db`), daily streak tracking, focus statistics, and tree inspection inside **My Forest**.
+- **Living 2D Sanctuary**: Multi-layer distant mountains, rolling hills, winding river, stepping stones, flowers, grass, clouds, and subtle wildlife/particles — with responsive laptop viewport scaling (`800x650` to `1200px+`).
+- **Four Smoothly Transitioning Themes**: Smooth color easing across **Morning**, **Afternoon**, **Night**, and **Chill** modes.
+- **Infinite Ambient Rain Audio**: Continuous seamless looping rain backdrop (`winmm` MCI worker + WPF fallback) with volume control and a smooth 400ms volume fade-in/out on toggle (`user_rain.mp3` + fallback `rain_master.wav`).
+- **Progress, Achievements & JSON Backup**: Local SQLite persistence (`forest_data.db`), daily streak tracking, focus statistics, tree inspection inside **My Forest**, and **Export Forest (`.json`) / Import Backup** right from the **Statistics** view.
 
 ---
 

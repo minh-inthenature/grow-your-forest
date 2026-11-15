@@ -161,9 +161,36 @@ def _draw_organic_lobe(canvas, cx, cy, rx, ry, fill, outline="", num_pts=16, rou
     return canvas.create_polygon(pts, fill=fill, outline=outline, width=1 if outline else 0, smooth=True)
 
 
+def _draw_tiny_soil_mound(canvas, cx, cy, size=1.0):
+    """Draw a tiny, organic dark soil mound with crumbs for nestled seeds."""
+    mw = max(6, int(13 * size))
+    mh = max(3, int(5.5 * size))
+    # Soft earthy contact base
+    canvas.create_oval(
+        cx - mw, cy - mh * 0.4,
+        cx + mw, cy + mh * 0.8,
+        fill="#2B1D14", outline=""
+    )
+    # Organic dark compost mound
+    mound_pts = [
+        cx - mw * 0.9, cy + mh * 0.4,
+        cx - mw * 0.6, cy - mh * 0.5,
+        cx - mw * 0.1, cy - mh * 0.9,
+        cx + mw * 0.4, cy - mh * 0.7,
+        cx + mw * 0.85, cy + mh * 0.3,
+        cx + mw * 0.5, cy + mh * 0.7,
+        cx - mw * 0.4, cy + mh * 0.75,
+    ]
+    canvas.create_polygon(mound_pts, fill="#4A3525", outline="#36251A", width=1, smooth=True)
+    # Tiny crumb specks
+    for ox, oy in ((-int(6 * size), int(2 * size)), (int(7 * size), int(1 * size)), (int(2 * size), int(3 * size))):
+        canvas.create_oval(cx + ox - 1, cy + oy - 1, cx + ox + 1, cy + oy + 1, fill="#2E1E14", outline="")
+
+
 def _draw_shadow_and_soil(canvas, cx, cy, rx, ry, grass_color="#43A047"):
-    """Draw a perspective shadow; mini forest trees get subtle turf & shadow,
-    while full study trees get a contoured sanctuary earth mound with pebbles."""
+    """Draw a perspective stone-ringed garden plot with rich tilled soil (#5C4332),
+    loose mossy cobblestones (#7E7B73), and overlapping grass tufts.
+    Mini forest trees keep a lightweight compact contact shadow."""
     if _IN_MINI_TREE or rx < 50:
         # Lightweight meadow integration: soft contact shadow + 2 small grass tufts
         srx = max(8, int(rx * 0.75))
@@ -181,50 +208,114 @@ def _draw_shadow_and_soil(canvas, cx, cy, rx, ry, grass_color="#43A047"):
                                fill=COLORS["grass_sun"], width=1)
         return
 
-    # Full study sanctuary earth mound
-    # Outer diffuse shadow
-    canvas.create_oval(
-        cx - int(rx * 1.25), cy - int(ry * 0.55),
-        cx + int(rx * 1.25), cy + int(ry * 1.15),
-        fill="#142617", outline="", width=0
-    )
-    # Core contact shadow
-    canvas.create_oval(
-        cx - int(rx * 0.95), cy - int(ry * 0.35),
-        cx + int(rx * 0.95), cy + int(ry * 0.85),
-        fill="#0B170D", outline="", width=0
-    )
-    # Earth mound base
-    canvas.create_oval(
-        cx - rx, cy - ry,
-        cx + rx, cy + ry,
-        fill=COLORS["soil_rich"], outline=COLORS["soil_dark"], width=1
-    )
-    # Lush grassy crest
-    canvas.create_oval(
-        cx - rx + 3, cy - ry - 2,
-        cx + rx - 3, cy + int(ry * 0.4),
-        fill=grass_color, outline="", width=0
-    )
-    # Highlight rim on sunlit top of mound
-    canvas.create_arc(
-        cx - rx + 6, cy - ry - 3,
-        cx + rx - 6, cy + int(ry * 0.3),
-        start=30, extent=120,
-        outline=COLORS["grass_sun"], width=2, style="arc"
-    )
-    # 3 small decorative pebbles along the front slope of the mound
-    pebbles = [
-        (-int(rx * 0.52), int(ry * 0.35), max(3, int(rx * 0.08)), max(2, int(ry * 0.16))),
-        (int(rx * 0.38), int(ry * 0.42), max(4, int(rx * 0.10)), max(2, int(ry * 0.20))),
-        (int(rx * 0.58), int(ry * 0.25), max(2, int(rx * 0.06)), max(2, int(ry * 0.14))),
-    ]
-    for px, py, prx, pry in pebbles:
-        canvas.create_oval(
-            cx + px - prx, cy + py - pry,
-            cx + px + prx, cy + py + pry,
-            fill="#BCAAA4", outline="#8D6E63", width=1
+    # Full study sanctuary garden plot:
+    # Natural stone-ringed soil bed replacing floating green disc and dark-green oval drop shadow
+    s_rx = rx
+    s_ry = max(int(ry * 1.2), int(rx * 0.27))
+
+    # Pre-calculated deterministic irregular cobblestone placements around the ring
+    cobblestones = []
+    num_stones = 14
+    for i in range(num_stones):
+        base_ang = (i / num_stones) * 6.2831853
+        d_ang = math.sin(i * 1.85 + 0.4) * 0.09
+        ang = base_ang + d_ang
+        dr = math.cos(i * 2.31 + 0.8) * 0.08
+        rad_x = s_rx * (0.94 + dr)
+        rad_y = s_ry * (0.94 + dr * 0.6)
+        kx = cx + rad_x * math.cos(ang)
+        ky = cy + rad_y * math.sin(ang)
+        sw = max(5, int(s_rx * 0.16 * (0.85 + 0.25 * math.cos(i * 1.7))))
+        sh = max(3, int(s_ry * 0.38 * (0.85 + 0.25 * math.sin(i * 2.1))))
+        cobblestones.append((i, kx, ky, sw, sh, ang))
+
+    def _draw_cobblestone(idx, kx, ky, sw, sh):
+        stone_pts = [
+            kx - sw, ky,
+            kx - sw * 0.7, ky - sh * 0.85,
+            kx + sw * 0.55, ky - sh * 0.9,
+            kx + sw, ky - sh * 0.15,
+            kx + sw * 0.75, ky + sh * 0.8,
+            kx - sw * 0.55, ky + sh * 0.85,
+        ]
+        # Base mossy cobblestone
+        canvas.create_polygon(stone_pts, fill="#7E7B73", outline="#383530", width=1, smooth=True)
+        # Soft sunlit top highlight
+        canvas.create_line(
+            kx - sw * 0.6, ky - sh * 0.45,
+            kx, ky - sh * 0.7,
+            kx + sw * 0.5, ky - sh * 0.5,
+            fill="#B2AFA5", width=1.5, smooth=True
         )
+        # Subtle moss patch on select cobblestones
+        if idx % 3 != 1:
+            mox = kx - sw * 0.25 if idx % 2 == 0 else kx + sw * 0.2
+            moy = ky + sh * 0.15 if idx % 2 == 0 else ky - sh * 0.2
+            mr = max(1.5, sw * 0.28)
+            canvas.create_oval(
+                mox - mr, moy - mr * 0.6,
+                mox + mr, moy + mr * 0.6,
+                fill="#596F4B" if idx % 2 == 0 else "#4B613E", outline=""
+            )
+
+    # 1. Back cobblestones (upper rim, ky < cy) drawn behind the recessed soil bed
+    back_stones = [s for s in cobblestones if s[2] < cy]
+    for idx, kx, ky, sw, sh, _ in back_stones:
+        _draw_cobblestone(idx, kx, ky, sw, sh)
+
+    # 2. Recessed patch of rich tilled soil (#5C4332)
+    canvas.create_oval(
+        cx - int(s_rx * 0.86), cy - int(s_ry * 0.78),
+        cx + int(s_rx * 0.86), cy + int(s_ry * 0.86),
+        fill="#322218", outline=""
+    )
+    soil_pts = []
+    n_soil_pts = 16
+    for i in range(n_soil_pts):
+        ang = (i / n_soil_pts) * 6.2831853
+        wob = 1.0 + 0.035 * math.sin(i * 3.1) - 0.02 * math.cos(i * 4.7)
+        px = cx + s_rx * 0.82 * wob * math.cos(ang)
+        py = cy + s_ry * 0.78 * wob * math.sin(ang)
+        soil_pts.extend((px, py))
+    canvas.create_polygon(soil_pts, fill="#5C4332", outline="", smooth=True)
+
+    # Tilled soil furrow striations & earth texture
+    furrows = [
+        (-0.50, -0.30, 0.45, -0.25),
+        (-0.62, 0.05, 0.58, 0.08),
+        (-0.45, 0.38, 0.40, 0.42),
+        (-0.25, -0.12, 0.28, -0.10),
+    ]
+    for fx0, fy0, fx1, fy1 in furrows:
+        x0 = cx + s_rx * 0.72 * fx0
+        y0 = cy + s_ry * 0.72 * fy0
+        x1 = cx + s_rx * 0.72 * fx1
+        y1 = cy + s_ry * 0.72 * fy1
+        canvas.create_line(x0, y0, x1, y1, fill="#453123", width=1.5, smooth=True)
+        canvas.create_line(x0 + 1, y0 - 1, x1 - 1, y1 - 1, fill="#6E513D", width=1, smooth=True)
+
+    # 3. Front cobblestones (lower rim, ky >= cy) overlapping the front soil edge
+    front_stones = [s for s in cobblestones if s[2] >= cy]
+    for _, kx, ky, sw, sh, _ in front_stones:
+        canvas.create_oval(
+            kx - sw * 0.85, ky + sh * 0.3,
+            kx + sw * 0.85, ky + sh * 0.95,
+            fill="#271B13", outline=""
+        )
+    for idx, kx, ky, sw, sh, _ in front_stones:
+        _draw_cobblestone(idx, kx, ky, sw, sh)
+
+    # 4. Small grass tufts overlapping the edges into the soil
+    tuft_angles = [0.15, 0.85, 1.45, 2.30, 3.10, 3.85, 4.60, 5.50]
+    for i, tang in enumerate(tuft_angles):
+        dist_r = s_rx * (0.84 + 0.10 * math.sin(i * 2.3))
+        dist_ry = s_ry * (0.82 + 0.10 * math.cos(i * 1.9))
+        gx = cx + dist_r * math.cos(tang)
+        gy = cy + dist_ry * math.sin(tang)
+        b_len = max(4, int(s_ry * 0.45))
+        canvas.create_line(gx, gy, gx - 2, gy - b_len, fill="#557D45", width=1.2)
+        canvas.create_line(gx, gy, gx + 2, gy - int(b_len * 0.85), fill="#699254", width=1)
+        canvas.create_line(gx, gy, gx, gy - int(b_len * 1.1), fill="#7DA764", width=1)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -233,40 +324,75 @@ def _draw_shadow_and_soil(canvas, cx, cy, rx, ry, grass_color="#43A047"):
 
 def draw_oak_seed(canvas, cx, cy, size=1.0):
     _draw_shadow_and_soil(canvas, cx, cy + 20, int(56 * size), int(11 * size))
-    # Cozy nest of clover & moss leaflets around the base
-    for ox, oy, col in ((-11, 15, COLORS["oak_foliage_dark"]), (11, 16, COLORS["oak_foliage_mid"]),
-                        (-6, 18, COLORS["oak_foliage_light"]), (6, 18, COLORS["oak_foliage_light"])):
-        _draw_organic_lobe(canvas, cx + int(ox * size), cy + oy, int(7 * size), int(4 * size),
-                           fill=col, num_pts=8, roughness=0.14, seed=200 + ox)
-    # Prominent Acorn body (1.3x)
-    nut_h = int(24 * size)
-    nut_w = int(18 * size)
-    acorn_y = cy + 12 - int(nut_h * 0.6)
-    # Acorn nut
+    _draw_tiny_soil_mound(canvas, cx, cy + 18, size)
+
+    # Delicate organic acorn nestled into the soil mound (40% size)
+    nut_h = max(4, int(10 * size))
+    nut_w = max(3, int(7 * size))
+    sy = cy + 17 - int(nut_h * 0.45)
+
+    # Pointed acorn nut body tapering into the soil
+    nut_pts = [
+        cx - nut_w // 2, sy,
+        cx - nut_w // 2 + 1, sy + int(nut_h * 0.55),
+        cx, sy + nut_h,
+        cx + nut_w // 2 - 1, sy + int(nut_h * 0.55),
+        cx + nut_w // 2, sy,
+    ]
+    canvas.create_polygon(nut_pts, fill="#8D6E63", outline="#4E342E", width=1, smooth=True)
+    # Sun highlight glint on acorn
     canvas.create_oval(
-        cx - nut_w // 2, acorn_y,
-        cx + nut_w // 2, acorn_y + nut_h,
-        fill=COLORS["oak_acorn_nut"], outline=COLORS["oak_bark_dark"], width=1
-    )
-    # Acorn cap
-    cap_h = int(10 * size)
-    cap_w = int(21 * size)
-    canvas.create_oval(
-        cx - cap_w // 2, acorn_y - cap_h // 2,
-        cx + cap_w // 2, acorn_y + cap_h // 2 + 1,
-        fill=COLORS["oak_acorn_cap"], outline=COLORS["oak_bark_shadow"], width=1
-    )
-    # Cap stem
-    canvas.create_line(
-        cx, acorn_y - cap_h // 2, cx - 2, acorn_y - cap_h // 2 - int(8 * size),
-        fill=COLORS["oak_bark_dark"], width=max(1, int(2.5 * size))
-    )
-    # Warm sun highlight glint
-    canvas.create_oval(
-        cx - int(4 * size), acorn_y + int(4 * size),
-        cx, acorn_y + int(8 * size),
+        cx - max(1, int(2 * size)), sy + max(1, int(2 * size)),
+        cx, sy + max(2, int(4 * size)),
         fill="#EFE6DF", outline=""
     )
+
+    # Classic Acorn Cap
+    cap_w = max(4, int(8.5 * size))
+    cap_h = max(2, int(4 * size))
+    canvas.create_oval(
+        cx - cap_w // 2, sy - cap_h // 2,
+        cx + cap_w // 2, sy + cap_h // 2,
+        fill="#5D4037", outline="#3E2723", width=1
+    )
+    # Cap texture cross-line
+    canvas.create_line(cx - cap_w // 3, sy, cx + cap_w // 3, sy, fill="#3E2723", width=1)
+    # Tiny curved stem
+    stem_top_y = sy - cap_h // 2 - max(2, int(3 * size))
+    canvas.create_line(
+        cx, sy - cap_h // 2,
+        cx - max(1, int(1.5 * size)), stem_top_y,
+        fill="#3E2723", width=1
+    )
+
+    # Tiny emerging pale-green shoot (1-2 tiny curved leaves)
+    shoot_h = max(3, int(7 * size))
+    shoot_tip_x = cx + max(1, int(2 * size))
+    shoot_tip_y = stem_top_y - shoot_h + max(1, int(1.5 * size))
+    canvas.create_line(
+        cx, sy - cap_h // 2,
+        cx + max(1, int(1.5 * size)), sy - cap_h // 2 - int(shoot_h * 0.5),
+        shoot_tip_x, shoot_tip_y,
+        fill="#81C784", width=max(1, int(1.4 * size)), smooth=True
+    )
+    # 2 tiny curved sprout leaves at tip
+    leaf_w = max(2, int(3.5 * size))
+    leaf_h = max(2, int(2.5 * size))
+    canvas.create_oval(
+        shoot_tip_x - leaf_w, shoot_tip_y - leaf_h,
+        shoot_tip_x, shoot_tip_y + leaf_h // 2,
+        fill="#66BB6A", outline="#43A047", width=1
+    )
+    canvas.create_oval(
+        shoot_tip_x - 1, shoot_tip_y - int(leaf_h * 0.8),
+        shoot_tip_x + leaf_w - 1, shoot_tip_y + int(leaf_h * 0.3),
+        fill="#81C784", outline="", width=0
+    )
+
+    # Cozy moss / clover leaflets nestled in the soil
+    for ox, oy, col in ((-int(7 * size), int(16 * size), "#4E7037"), (int(8 * size), int(17 * size), "#689F38")):
+        _draw_organic_lobe(canvas, cx + ox, cy + oy, max(2, int(3.5 * size)), max(2, int(2.2 * size)),
+                           fill=col, num_pts=6, roughness=0.12, seed=200 + ox)
 
 
 def draw_oak_sprout(canvas, cx, cy, size=1.0):
@@ -485,36 +611,69 @@ def draw_oak_flourishing(canvas, cx, cy, size=1.0):
 # ══════════════════════════════════════════════════════════════════
 
 def draw_cherry_seed(canvas, cx, cy, size=1.0):
-    _draw_shadow_and_soil(canvas, cx, cy + 20, int(56 * size), int(11 * size), grass_color="#66BB6A")
-    # Cozy moss nest & clover leaves
-    for ox, oy, col in ((-10, 15, COLORS["grass_deep"]), (10, 15, COLORS["grass_lush"]),
-                        (-5, 18, COLORS["grass_bright"]), (5, 18, COLORS["grass_bright"])):
-        _draw_organic_lobe(canvas, cx + int(ox * size), cy + oy, int(7 * size), int(4 * size),
-                           fill=col, num_pts=8, roughness=0.14, seed=210 + ox)
-    # Prominent Sakura pit seed (1.3x)
-    seed_r = int(9.5 * size)
-    seed_cy = cy + 9
+    _draw_shadow_and_soil(canvas, cx, cy + 20, int(56 * size), int(11 * size))
+    _draw_tiny_soil_mound(canvas, cx, cy + 18, size)
+
+    # Delicate pointed sakura pit nestled into soil (40% size)
+    pit_h = max(4, int(9.5 * size))
+    pit_w = max(3, int(6.5 * size))
+    sy = cy + 17 - int(pit_h * 0.45)
+
+    pit_pts = [
+        cx, sy - max(1, int(1.5 * size)),
+        cx - pit_w // 2, sy + int(pit_h * 0.35),
+        cx - max(1, int(1.5 * size)), sy + pit_h,
+        cx + max(1, int(1.5 * size)), sy + pit_h,
+        cx + pit_w // 2, sy + int(pit_h * 0.35),
+    ]
+    canvas.create_polygon(pit_pts, fill="#6D4C41", outline="#4A3528", width=1, smooth=True)
+    # Center pit ridge & glint
+    canvas.create_line(cx, sy, cx, sy + int(pit_h * 0.7), fill="#4E342E", width=1)
     canvas.create_oval(
-        cx - seed_r, seed_cy - seed_r,
-        cx + seed_r, seed_cy + seed_r,
-        fill=COLORS["cherry_bark_mid"], outline=COLORS["cherry_bark_shadow"], width=1
+        cx - max(1, int(2 * size)), sy + max(1, int(2 * size)),
+        cx - 1, sy + max(2, int(3.5 * size)),
+        fill="#D7CCC8", outline=""
     )
-    # Warm sun glint on sakura pit
-    canvas.create_oval(
-        cx - int(4 * size), seed_cy - int(4 * size),
-        cx - int(1 * size), seed_cy - int(1 * size),
-        fill=COLORS["cherry_bark_sun"], outline=""
+
+    # Tiny emerging pale-green shoot with sprout leaf
+    shoot_h = max(3, int(6.5 * size))
+    shoot_tip_x = cx + max(1, int(2 * size))
+    shoot_tip_y = sy - shoot_h
+    canvas.create_line(
+        cx, sy,
+        cx + 1, sy - int(shoot_h * 0.5),
+        shoot_tip_x, shoot_tip_y,
+        fill="#81C784", width=max(1, int(1.3 * size)), smooth=True
     )
-    # Fallen pink blossom petals resting beside it
+    lw = max(2, int(3 * size))
+    lh = max(2, int(2 * size))
     canvas.create_oval(
-        cx + int(10 * size), cy + 12,
-        cx + int(19 * size), cy + 17,
-        fill=COLORS["cherry_petal_soft"], outline=COLORS["cherry_petal_rose"], width=1
+        shoot_tip_x, shoot_tip_y - lh,
+        shoot_tip_x + lw, shoot_tip_y + lh // 2,
+        fill="#66BB6A", outline="#388E3C", width=1
+    )
+
+    # Species-tinted detail: Tiny emerging pink blossom bud beside shoot
+    bud_x = cx - max(1, int(2.5 * size))
+    bud_y = sy - max(1, int(3 * size))
+    bw = max(2, int(3.2 * size))
+    bh = max(2, int(2.8 * size))
+    canvas.create_oval(
+        bud_x - bw // 2, bud_y - bh // 2,
+        bud_x + bw // 2, bud_y + bh // 2,
+        fill="#FFB7C5", outline="#F48FB1", width=1
     )
     canvas.create_oval(
-        cx - int(18 * size), cy + 13,
-        cx - int(11 * size), cy + 17,
-        fill=COLORS["cherry_petal_light"], outline=COLORS["cherry_petal_pink"], width=1
+        bud_x - max(1, int(1 * size)), bud_y - max(1, int(1.5 * size)),
+        bud_x + max(1, int(1 * size)), bud_y,
+        fill="#FFF0F5", outline=""
+    )
+
+    # Tiny fallen pink petal resting beside it on the rich soil
+    canvas.create_oval(
+        cx + int(8 * size), cy + 18,
+        cx + int(14 * size), cy + int(21.5 * size),
+        fill="#FFB7C5", outline="#F06292", width=1
     )
 
 
@@ -739,28 +898,62 @@ def draw_cherry_flourishing(canvas, cx, cy, size=1.0):
 
 def draw_pine_seed(canvas, cx, cy, size=1.0):
     _draw_shadow_and_soil(canvas, cx, cy + 20, int(56 * size), int(11 * size))
-    # Pine moss & forest floor needles nest
-    for ox, oy, col in ((-10, 15, COLORS["pine_needle_deep"]), (10, 15, COLORS["pine_needle_mid"]),
-                        (-5, 18, COLORS["pine_needle_light"]), (5, 18, COLORS["pine_needle_bright"])):
-        _draw_organic_lobe(canvas, cx + int(ox * size), cy + oy, int(7 * size), int(4 * size),
-                           fill=col, num_pts=8, roughness=0.14, seed=220 + ox)
-    # Prominent Pinecone seed (1.3x)
-    cone_h = int(24 * size)
-    cone_w = int(16 * size)
-    py = cy + 12 - int(cone_h * 0.6)
-    canvas.create_oval(
-        cx - cone_w // 2, py,
-        cx + cone_w // 2, py + cone_h,
-        fill=COLORS["pine_cone_mid"], outline=COLORS["pine_cone_dark"], width=1
+    _draw_tiny_soil_mound(canvas, cx, cy + 18, size)
+
+    # Delicate pointed pine nut seed with winged scale (40% size)
+    nut_h = max(4, int(10 * size))
+    nut_w = max(3, int(6 * size))
+    sy = cy + 17 - int(nut_h * 0.45)
+
+    # Teardrop pine nut nestled into soil
+    nut_pts = [
+        cx, sy,
+        cx - nut_w // 2, sy + int(nut_h * 0.4),
+        cx - 1, sy + nut_h,
+        cx + 1, sy + nut_h,
+        cx + nut_w // 2, sy + int(nut_h * 0.4),
+    ]
+    canvas.create_polygon(nut_pts, fill="#5D4037", outline="#3E2723", width=1, smooth=True)
+    # Winged seed scale detail along one flank
+    canvas.create_polygon(
+        cx + nut_w // 2 - 1, sy + int(nut_h * 0.2),
+        cx + nut_w // 2 + max(1, int(2.5 * size)), sy + int(nut_h * 0.5),
+        cx + nut_w // 2, sy + int(nut_h * 0.8),
+        fill="#8D6E63", outline="", smooth=True
     )
-    # Cone scale lines + warm glint
-    for i in range(3):
-        sy = py + int(cone_h * (0.25 + i * 0.25))
-        canvas.create_line(cx - cone_w // 3, sy, cx + cone_w // 3, sy, fill=COLORS["pine_cone_dark"], width=1)
+    # Sun glint
     canvas.create_oval(
-        cx - int(3 * size), py + int(4 * size),
-        cx, py + int(8 * size),
+        cx - max(1, int(1.5 * size)), sy + max(1, int(2 * size)),
+        cx, sy + max(2, int(4 * size)),
         fill="#D7CCC8", outline=""
+    )
+
+    # Species-tinted detail: Emerging pine needle tip (2 tiny needle-like sprout leaves)
+    needle_h = max(3, int(6.5 * size))
+    # Left needle
+    canvas.create_line(
+        cx, sy,
+        cx - max(1, int(2 * size)), sy - needle_h,
+        fill="#4CAF50", width=max(1, int(1.2 * size))
+    )
+    # Right needle
+    canvas.create_line(
+        cx, sy,
+        cx + max(1, int(2.2 * size)), sy - int(needle_h * 0.9),
+        fill="#81C784", width=max(1, int(1.2 * size))
+    )
+    # Tiny sunlit tip
+    canvas.create_oval(
+        cx - max(1, int(2.5 * size)), sy - needle_h - 1,
+        cx - max(1, int(1.5 * size)), sy - needle_h + 1,
+        fill="#C8E6C9", outline=""
+    )
+
+    # 2 tiny dropped needles on the dark soil
+    canvas.create_line(
+        cx - int(9 * size), cy + 18,
+        cx - int(4 * size), cy + int(19.5 * size),
+        fill="#4E342E", width=1
     )
 
 
@@ -945,34 +1138,57 @@ def draw_pine_flourishing(canvas, cx, cy, size=1.0):
 
 def draw_angel_seed(canvas, cx, cy, size=1.0):
     _draw_shadow_and_soil(canvas, cx, cy + 20, int(56 * size), int(11 * size))
-    # Cozy bed of sage moss & fern tufts
-    for ox, oy, col in ((-11, 15, COLORS["angel_moss_deep"]), (11, 15, COLORS["angel_moss_sage"]),
-                        (-6, 18, COLORS["angel_moss_light"]), (6, 18, COLORS["angel_foliage_mid"])):
-        _draw_organic_lobe(canvas, cx + int(ox * size), cy + oy, int(7 * size), int(4 * size),
-                           fill=col, num_pts=8, roughness=0.14, seed=230 + ox)
-    # Prominent ancient mossy seed (1.3x)
-    nut_h = int(21 * size)
-    nut_w = int(18 * size)
-    seed_cy = cy + 9
+    _draw_tiny_soil_mound(canvas, cx, cy + 18, size)
+
+    # Ancient mystical teardrop seed nestled into soil (40% size)
+    nut_h = max(4, int(10 * size))
+    nut_w = max(3, int(7 * size))
+    sy = cy + 17 - int(nut_h * 0.45)
+
+    nut_pts = [
+        cx, sy,
+        cx - nut_w // 2, sy + int(nut_h * 0.4),
+        cx - 1, sy + nut_h,
+        cx + 1, sy + nut_h,
+        cx + nut_w // 2, sy + int(nut_h * 0.4),
+    ]
+    canvas.create_polygon(nut_pts, fill="#543D2B", outline="#36281D", width=1, smooth=True)
+    # Sage moss striations
+    canvas.create_line(cx - 1, sy + 2, cx - 1, sy + int(nut_h * 0.7), fill="#81977A", width=1)
+    # Sun glint
     canvas.create_oval(
-        cx - nut_w // 2, seed_cy - nut_h // 2,
-        cx + nut_w // 2, seed_cy + nut_h // 2,
-        fill=COLORS["angel_bark_mid"], outline=COLORS["angel_bark_shadow"], width=1
-    )
-    # Warm highlight glint
-    canvas.create_oval(
-        cx - int(4 * size), seed_cy - int(4 * size),
-        cx - int(1 * size), seed_cy - int(1 * size),
+        cx - max(1, int(2 * size)), sy + max(1, int(2 * size)),
+        cx, sy + max(2, int(4 * size)),
         fill="#D7CCC8", outline=""
     )
-    # Delicate draping strands of sage moss
+
+    # Tiny ethereal emerging shoot with 2 delicate curved leaves
+    shoot_h = max(3, int(6.5 * size))
+    shoot_tip_x = cx + max(1, int(1.5 * size))
+    shoot_tip_y = sy - shoot_h
     canvas.create_line(
-        cx - 2, seed_cy, cx + int(10 * size), cy + 17,
-        fill=COLORS["angel_moss_sage"], width=2, smooth=True
+        cx, sy,
+        cx + 1, sy - int(shoot_h * 0.5),
+        shoot_tip_x, shoot_tip_y,
+        fill="#9CCC65", width=max(1, int(1.3 * size)), smooth=True
     )
+    # Delicate sage-green sprout leaves
+    canvas.create_oval(
+        shoot_tip_x - max(2, int(3 * size)), shoot_tip_y - max(1, int(1.8 * size)),
+        shoot_tip_x, shoot_tip_y + max(1, int(1 * size)),
+        fill="#AED581", outline="#7CB342", width=1
+    )
+    canvas.create_oval(
+        shoot_tip_x, shoot_tip_y - max(1, int(2 * size)),
+        shoot_tip_x + max(2, int(2.5 * size)), shoot_tip_y + max(1, int(0.8 * size)),
+        fill="#C5E1A5", outline="", width=0
+    )
+
+    # Delicate draping strands of sage moss around seed
     canvas.create_line(
-        cx + 1, seed_cy + 2, cx + int(7 * size), cy + 19,
-        fill=COLORS["angel_moss_light"], width=1, smooth=True
+        cx - 2, sy + int(nut_h * 0.5),
+        cx + int(6 * size), cy + 18,
+        fill=COLORS["angel_moss_sage"], width=1.5, smooth=True
     )
 
 

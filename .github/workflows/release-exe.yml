@@ -34,16 +34,25 @@ jobs:
             --add-data="rain_master.wav;." `
             --add-data="rain_service.ps1;." `
             --add-data="forest.ico;." `
+            --add-data="fonts;fonts" `
             app.py
 
-      - name: Upload Build Artifact
+      - name: Create Portable ZIP Release
+        run: |
+          Compress-Archive -Path app.py, audio_player.py, database.py, scenery.py, tree_renderer.py, forest_data.db, forest.ico, user_rain.mp3, rain_master.wav, rain_service.ps1, run.bat, create_shortcut.bat, fonts, README.md -DestinationPath GrowYourForest-Portable.zip -Force
+
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: GrowYourForest-Windows
-          path: dist/GrowYourForest.exe
+          path: |
+            dist/GrowYourForest.exe
+            GrowYourForest-Portable.zip
 
-      - name: Attach EXE to GitHub Release
+      - name: Attach Assets to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/GrowYourForest.exe
+          files: |
+            dist/GrowYourForest.exe
+            GrowYourForest-Portable.zip

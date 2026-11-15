@@ -467,5 +467,171 @@ def set_setting(key, value):
     conn.close()
 
 
+def export_backup_data():
+    """Collect sessions, daily logs, achievements, and settings into a JSON-serializable dict."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, start_time, end_time, planned_duration, actual_focused_seconds,
+               tree_stage, COALESCE(tree_species, 'oak') AS tree_species,
+               COALESCE(task_name, 'General Study') AS task_name,
+               completed, abandoned
+        FROM sessions
+        ORDER BY id ASC
+    """)
+    sessions = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT date, total_seconds, sessions_completed
+        FROM daily_log
+        ORDER BY date ASC
+    """)
+    daily_log = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT id, name, description, icon, unlocked, unlocked_at
+        FROM achievements
+        ORDER BY id ASC
+    """)
+    achievements = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute("SELECT key, value FROM settings")
+    settings = {r["key"]: r["value"] for r in cursor.fetchall()}
+
+    conn.close()
+    return {
+        "app": "Grow Your Forest",
+        "version": "1.1.0",
+        "exported_at": datetime.now().isoformat(),
+        "sessions": sessions,
+        "daily_log": daily_log,
+        "achievements": achievements,
+        "settings": settings,
+    }
+
+
+def export_to_json_file(filepath):
+    """Write a complete local forest backup to a JSON file."""
+    data = export_backup_data()
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    return data
+
+
+def import_backup_data(data):
+    """Restore sessions, daily study history, streaks, achievements, and settings from a backup dict."""
+    if not isinstance(data, dict) or not any(
+        k in data for k in ("sessions", "daily_log", "achievements", "settings")
+    ):
+        raise ValueError("Invalid Grow Your Forest backup file.")
+
+    sessions = data.get("sessions") or []
+    daily_log = data.get("daily_log") or []
+    achievements = data.get("achievements") or []
+    settings = data.get("settings") or {}
+
+    if not isinstance(sessions, list) or not isinstance(daily_log, list):
+        raise ValueError("Backup sessions or daily_log format is invalid.")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        for s in sessions:
+            if not isinstance(s, dict) or not s.get("start_time"):
+                continue
+            sid = s.get("id")
+            if sid is not None:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO sessions (
+                        id, start_time, end_time, planned_duration, actual_focused_seconds,
+                        tree_stage, tree_species, task_name, completed, abandoned
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    int(sid),
+                    s["start_time"],
+                    s.get("end_time"),
+                    int(s.get("planned_duration", 1500)),
+                    float(s.get("actual_focused_seconds", 0.0)),
+                    s.get("tree_stage", "seed"),
+                    s.get("tree_species", "oak") or "oak",
+                    s.get("task_name", "General Study") or "General Study",
+                    int(s.get("completed", 0)),
+                    int(s.get("abandoned", 0)),
+                ))
+            else:
+                cursor.execute("""
+                    INSERT INTO sessions (
+                        start_time, end_time, planned_duration, actual_focused_seconds,
+                        tree_stage, tree_species, task_name, completed, abandoned
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    s["start_time"],
+                    s.get("end_time"),
+                    int(s.get("planned_duration", 1500)),
+                    float(s.get("actual_focused_seconds", 0.0)),
+                    s.get("tree_stage", "seed"),
+                    s.get("tree_species", "oak") or "oak",
+                    s.get("task_name", "General Study") or "General Study",
+                    int(s.get("completed", 0)),
+                    int(s.get("abandoned", 0)),
+                ))
+
+        for d in daily_log:
+            if not isinstance(d, dict) or not d.get("date"):
+                continue
+            cursor.execute("""
+                INSERT OR REPLACE INTO daily_log (date, total_seconds, sessions_completed)
+                VALUES (?, ?, ?)
+            """, (
+                d["date"],
+                float(d.get("total_seconds", 0.0)),
+                int(d.get("sessions_completed", 0)),
+            ))
+
+        unlocked_restored = 0
+        if isinstance(achievements, list):
+            for a in achievements:
+                if not isinstance(a, dict) or not a.get("id"):
+                    continue
+                is_unlocked = 1 if a.get("unlocked") else 0
+                if is_unlocked:
+                    unlocked_restored += 1
+                    cursor.execute(
+                        "UPDATE achievements SET unlocked = 1, unlocked_at = ? WHERE id = ?",
+                        (a.get("unlocked_at") or datetime.now().isoformat(), a["id"]),
+                    )
+
+        if isinstance(settings, dict):
+            for k, v in settings.items():
+                if k and v is not None:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                        (str(k), str(v)),
+                    )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+
+    # Re-evaluate milestone unlocks cleanly in case streak/total thresholds match
+    check_and_unlock_achievements()
+    return {
+        "sessions_restored": len(sessions),
+        "days_restored": len(daily_log),
+        "achievements_restored": unlocked_restored,
+    }
+
+
+def import_from_json_file(filepath):
+    """Load and restore a local JSON backup created by export_to_json_file."""
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return import_backup_data(data)
+
+
 # Initialize DB on import
 init_db()
