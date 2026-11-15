@@ -348,12 +348,12 @@ class RainButton(tk.Frame):
 
 class ThemeModeButton(tk.Frame):
     """Compound theme mode button with icon and text strictly centered with gap: 6px."""
-    def __init__(self, master, icon, text, font, ctrl_pady=3, **kwargs):
+    def __init__(self, master, icon, text, font, ctrl_pady=4, ctrl_padx=12, **kwargs):
         fg = kwargs.pop("fg", None)
         super().__init__(master, cursor="hand2", **kwargs)
         bg = self.cget("bg")
         self.inner = tk.Frame(self, bg=bg)
-        self.inner.pack(expand=True, anchor="center", padx=5, pady=ctrl_pady)
+        self.inner.pack(expand=True, anchor="center", padx=ctrl_padx, pady=ctrl_pady)
         self.ico = tk.Label(self.inner, text=icon, font=("Segoe UI Emoji", 8), bg=bg, fg=fg)
         self.ico.pack(side="left", padx=(0, 6), anchor="center")
         self.lbl = tk.Label(self.inner, text=text, font=font, bg=bg, fg=fg)
@@ -430,6 +430,17 @@ class GrowYourForestApp:
         self.session_start_time = None
         self.selected_species = "cherry_blossom"
         self.current_task = "General Study"
+        self.task_draft_species = "cherry_blossom"
+        self.active_task_id = None
+        saved_active = db.get_setting("active_task_id")
+        if saved_active and str(saved_active).isdigit():
+            t_active = db.get_task_by_id(int(saved_active))
+            if t_active and not t_active["completed"]:
+                self.active_task_id = t_active["id"]
+                self.current_task = t_active["title"]
+                self.selected_species = t_active["tree_species"]
+        self._task_popover = None
+        self._task_tooltip = None
         self.forest_filter_species = "all"
 
         # ── Water drop animation state ──
@@ -591,6 +602,7 @@ class GrowYourForestApp:
         self.font_small = (self.family_sans, 9)
         self.font_small_bold = (self.family_sans_semi, 9, "bold")
         self.font_small_italic = (self.family_sans, 9, "italic")
+        self.font_small_strike = (self.family_sans, 9, "overstrike")
         self.font_xs = (self.family_sans, 8)
         self.font_xs_bold = (self.family_sans_semi, 8, "bold")
         self.font_xs_italic = (self.family_sans, 8, "italic")
@@ -809,26 +821,20 @@ class GrowYourForestApp:
         v_up_icon.bind("<Enter>", lambda e: v_up_icon.configure(fg=THEME["fg"]))
         v_up_icon.bind("<Leave>", lambda e: v_up_icon.configure(fg=THEME["fg_muted"]))
 
-        # Center: Sleek 4-Theme Segmented Pill Bar with equalized widths & clear separation
-        use_short_theme_names = (is_tight or is_compact)
-        bar_w = 318 if use_short_theme_names else 382
-        bar_h = 28 if is_compact else 30
+        # Center: Sleek 4-Theme Segmented Pill Bar with auto content-fit widths (no clipping)
         theme_bar = tk.Frame(self.header_frame, bg=THEME["border"], bd=0,
-                             highlightbackground=THEME["border"], highlightthickness=1,
-                             width=bar_w, height=bar_h)
-        theme_bar.grid_propagate(False)
+                             highlightbackground=THEME["border"], highlightthickness=1)
         theme_bar.pack(side="right", anchor="center", padx=(0, group_gap))
-
-        for i in range(4):
-            theme_bar.columnconfigure(i, weight=1, uniform="theme_tab")
 
         self.theme_buttons = {}
         theme_choices = [
-            ("morning", "🌅", "Morn" if use_short_theme_names else "Morning"),
-            ("afternoon", "☀️", "Aft" if use_short_theme_names else "Afternoon"),
+            ("morning", "🌅", "Morning"),
+            ("afternoon", "☀️", "Afternoon"),
             ("night", "🌙", "Night"),
             ("chill", "☕", "Chill"),
         ]
+        tab_padx = 8 if is_tight else 12
+        tab_pady = 4 if not is_compact else 3
 
         for col_idx, (t_id, t_ico, t_text) in enumerate(theme_choices):
             is_active = (self.current_theme == t_id)
@@ -840,7 +846,8 @@ class GrowYourForestApp:
                 icon=t_ico,
                 text=t_text,
                 font=self.font_xs_bold,
-                ctrl_pady=ctrl_pady,
+                ctrl_pady=tab_pady,
+                ctrl_padx=tab_padx,
                 bg=btn_bg,
                 fg=btn_fg,
             )
@@ -1342,9 +1349,9 @@ class GrowYourForestApp:
         inner = tk.Frame(right, bg=THEME["bg_card"])
         inner.pack(expand=True, fill="both", padx=inner_padx, pady=inner_pady)
 
-        # ── Task / Study Goal Section ──
+        # ── Task List with Tree Assignment Section ──
         task_sec = tk.Frame(inner, bg=THEME["bg_card"])
-        task_sec.pack(fill="x", pady=(0, 9 if (is_compact or is_short) else 14))
+        task_sec.pack(fill="x", pady=(0, 8 if (is_compact or is_short) else 12))
 
         tk.Label(
             task_sec, text="🎯 Current Task / Subject",
@@ -1352,21 +1359,58 @@ class GrowYourForestApp:
         ).pack(anchor="w", pady=(0, 4))
 
         if not self.session_active:
-            entry_frame = tk.Frame(task_sec, bg=THEME["bg_dark"], padx=6, pady=4,
-                                   highlightbackground=THEME["border"], highlightthickness=1)
-            entry_frame.pack(fill="x", pady=(0, 5))
+            self._task_placeholder = "Add a task..."
+            input_row = tk.Frame(task_sec, bg=THEME["bg_card"])
+            input_row.pack(fill="x", pady=(0, 5))
+            input_row.columnconfigure(0, weight=1, minsize=0)
+            input_row.columnconfigure(1, weight=0)
+            input_row.columnconfigure(2, weight=0)
+            input_row.rowconfigure(0, minsize=34)
+
+            entry_frame = tk.Frame(
+                input_row, bg=THEME["bg_dark"], padx=8, pady=4,
+                highlightbackground=THEME["border"], highlightthickness=1
+            )
+            entry_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
             self.task_entry = tk.Entry(
-                entry_frame, font=self.font_small,
-                relief="flat", bg=THEME["bg_dark"], fg=THEME["fg"],
+                entry_frame, font=self.font_small, width=1,
+                relief="flat", bg=THEME["bg_dark"], fg=THEME["fg_light"],
                 insertbackground=THEME["fg"]
             )
-            self.task_entry.insert(0, self.current_task)
-            self.task_entry.pack(fill="x")
+            self.task_entry.insert(0, self._task_placeholder)
+            self.task_entry._is_placeholder = True
+            self.task_entry.pack(fill="both", expand=True)
+            self.task_entry.bind("<FocusIn>", self._on_task_entry_focus_in)
+            self.task_entry.bind("<FocusOut>", self._on_task_entry_focus_out)
             self.task_entry.bind("<KeyRelease>", self._on_task_entry_change)
+            self.task_entry.bind("<Return>", lambda e: self._add_task_from_entry())
 
-            # Quick presets (wrapped rows so tags never clip at sidebar right edge)
+            draft_meta = SPECIES_METADATA.get(self.task_draft_species, SPECIES_METADATA["oak"])
+            self.draft_species_btn = tk.Label(
+                input_row, text=f"{draft_meta['icon']} ▾",
+                font=self.font_small, bg=THEME["bg_dark"], fg=THEME["fg"],
+                padx=10, pady=0, cursor="hand2", anchor="center",
+                highlightbackground=THEME["border"], highlightthickness=1
+            )
+            self.draft_species_btn.grid(row=0, column=1, sticky="ns", padx=(0, 6))
+            self.draft_species_btn.bind(
+                "<Button-1>",
+                lambda e, w=self.draft_species_btn: self._open_species_popover(
+                    w, self.task_draft_species, self._set_draft_species
+                )
+            )
+
+            add_task_btn = tk.Label(
+                input_row, text="Add", font=self.font_xs_bold,
+                bg=THEME["accent"], fg=THEME.get("accent_fg", "#FFFFFF"),
+                padx=10, pady=0, cursor="hand2", anchor="center"
+            )
+            add_task_btn.grid(row=0, column=2, sticky="ns")
+            add_task_btn.bind("<Button-1>", lambda e: self._add_task_from_entry())
+
+            # Quick presets (category prefixes / quick-fill helpers)
             presets_frame = tk.Frame(task_sec, bg=THEME["bg_card"])
-            presets_frame.pack(fill="x", pady=(2, 0))
+            presets_frame.pack(fill="x", pady=(0, 5))
             presets = [
                 ("📚 Study", "Study"),
                 ("💻 Code", "Coding"),
@@ -1379,9 +1423,9 @@ class GrowYourForestApp:
                 row_idx = idx // 3
                 if row_idx not in row_frames:
                     rf = tk.Frame(presets_frame, bg=THEME["bg_card"])
-                    rf.pack(fill="x", pady=(0, 4))
+                    rf.pack(fill="x", pady=(0, 3))
                     row_frames[row_idx] = rf
-                is_sel = (self.current_task == val)
+                is_sel = (self.current_task == val or self.current_task.startswith(f"{val}:"))
                 btn = tk.Label(
                     row_frames[row_idx], text=label, font=self.font_xs,
                     bg=THEME["accent_light"] if is_sel else THEME["bg_dark"],
@@ -1390,6 +1434,9 @@ class GrowYourForestApp:
                 )
                 btn.pack(side="left", padx=(0, 4))
                 btn.bind("<Button-1>", lambda e, v=val: self._set_task_preset(v))
+
+            # Scrollable Task List (capped height so timer & Start Studying stay centered)
+            self._build_task_list_widget(task_sec, is_compact, is_short)
         else:
             # When studying, display badge
             badge_frame = tk.Frame(task_sec, bg=THEME["accent_light"], padx=8, pady=5,
@@ -1582,16 +1629,404 @@ class GrowYourForestApp:
         b = max(0, int(b * (1 - factor)))
         return f"#{r:02x}{g:02x}{b:02x}"
 
-    # ──────────────── Timer Logic ────────────────
+    # ──────────────── Task List & Tree Assignment Logic ────────────────
+
+    def _on_task_entry_focus_in(self, event=None):
+        if hasattr(self, "task_entry") and getattr(self.task_entry, "_is_placeholder", False):
+            self.task_entry.delete(0, "end")
+            self.task_entry.configure(fg=THEME["fg"])
+            self.task_entry._is_placeholder = False
+
+    def _on_task_entry_focus_out(self, event=None):
+        if hasattr(self, "task_entry") and not self.task_entry.get().strip():
+            self.task_entry.delete(0, "end")
+            self.task_entry.insert(0, self._task_placeholder)
+            self.task_entry.configure(fg=THEME["fg_light"])
+            self.task_entry._is_placeholder = True
 
     def _on_task_entry_change(self, event=None):
-        if hasattr(self, "task_entry"):
+        if hasattr(self, "task_entry") and not getattr(self.task_entry, "_is_placeholder", False):
             val = self.task_entry.get().strip()
-            self.current_task = val if val else "General Study"
+            if val:
+                self.current_task = val
+            elif self.active_task_id is None:
+                self.current_task = "General Study"
+
+    def _set_draft_species(self, species_id):
+        self.task_draft_species = species_id
+        if hasattr(self, "draft_species_btn") and self.draft_species_btn.winfo_exists():
+            meta = SPECIES_METADATA.get(species_id, SPECIES_METADATA["oak"])
+            self.draft_species_btn.configure(text=f"{meta['icon']} ▾")
+
+    def _close_task_popover(self):
+        if self._task_popover is not None:
+            try:
+                if self._task_popover.winfo_exists():
+                    self._task_popover.destroy()
+            except Exception:
+                pass
+            self._task_popover = None
+
+    def _open_species_popover(self, anchor_widget, current_species, on_select):
+        """Open a compact themed tree-species picker popover anchored to a button/badge."""
+        self._close_task_popover()
+        pop = tk.Toplevel(self.root)
+        pop.overrideredirect(True)
+        pop.configure(bg=THEME["border"], padx=1, pady=1)
+        try:
+            pop.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        inner = tk.Frame(pop, bg=THEME["bg_card"], padx=4, pady=4)
+        inner.pack(fill="both", expand=True)
+
+        for sp_id in ("cherry_blossom", "pine", "angel_oak", "oak"):
+            meta = SPECIES_METADATA[sp_id]
+            is_sel = (sp_id == current_species)
+            row_bg = THEME["accent_light"] if is_sel else THEME["bg_card"]
+            row_fg = THEME["green_dark"] if is_sel else THEME["fg"]
+            lbl = tk.Label(
+                inner, text=f"{meta['icon']}  {meta['name']}",
+                font=self.font_xs_bold if is_sel else self.font_xs,
+                bg=row_bg, fg=row_fg, anchor="w", padx=8, pady=4, cursor="hand2"
+            )
+            lbl.pack(fill="x", pady=1)
+            lbl.bind("<Enter>", lambda e, w=lbl, sel=is_sel: w.configure(
+                bg=THEME["accent_light"] if sel else THEME["bg_dark"]
+            ))
+            lbl.bind("<Leave>", lambda e, w=lbl, rb=row_bg: w.configure(bg=rb))
+            lbl.bind("<Button-1>", lambda e, sid=sp_id: (self._close_task_popover(), on_select(sid)))
+
+        pop.update_idletasks()
+        ax = anchor_widget.winfo_rootx()
+        ay = anchor_widget.winfo_rooty() + anchor_widget.winfo_height() + 3
+        pw = pop.winfo_reqwidth()
+        ph = pop.winfo_reqheight()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        if ax + pw > sw - 12:
+            ax = max(12, sw - pw - 12)
+        if ay + ph > sh - 12:
+            ay = max(12, anchor_widget.winfo_rooty() - ph - 3)
+        pop.geometry(f"+{ax}+{ay}")
+
+        pop.bind("<FocusOut>", lambda e: self.root.after(80, self._close_task_popover))
+        pop.bind("<Escape>", lambda e: self._close_task_popover())
+        pop.focus_set()
+        self._task_popover = pop
+
+    def _add_task_from_entry(self):
+        if not hasattr(self, "task_entry"):
+            return
+        if getattr(self.task_entry, "_is_placeholder", False):
+            return
+        title = self.task_entry.get().strip()
+        if not title:
+            return
+        new_task = db.add_task(title, self.task_draft_species)
+        if new_task:
+            self.active_task_id = new_task["id"]
+            db.set_setting("active_task_id", str(new_task["id"]))
+            self.current_task = new_task["title"]
+            self.selected_species = new_task["tree_species"]
+        self._show_timer_view()
 
     def _set_task_preset(self, task_val):
-        self.current_task = task_val
+        """Use quick-subject tags as category prefixes or quick-fill helpers."""
+        if hasattr(self, "task_entry") and self.task_entry.winfo_exists():
+            is_ph = getattr(self.task_entry, "_is_placeholder", False)
+            raw = "" if is_ph else self.task_entry.get().strip()
+            known_prefixes = ("Study:", "Coding:", "Writing:", "Science:", "Creative:")
+            if not raw:
+                self._on_task_entry_focus_in()
+                self.task_entry.insert(0, f"{task_val}: ")
+                self.task_entry.icursor("end")
+                self.task_entry.focus_set()
+                self.current_task = task_val
+                return
+            replaced = False
+            for kp in known_prefixes:
+                if raw.startswith(kp):
+                    rest = raw[len(kp):].lstrip()
+                    new_text = f"{task_val}: {rest}" if rest else f"{task_val}: "
+                    self.task_entry.delete(0, "end")
+                    self.task_entry.insert(0, new_text)
+                    self.task_entry.icursor("end")
+                    self.task_entry.focus_set()
+                    self.current_task = new_text.strip().rstrip(":") or task_val
+                    replaced = True
+                    break
+            if not replaced:
+                new_text = f"{task_val}: {raw}"
+                self.task_entry.delete(0, "end")
+                self.task_entry.insert(0, new_text)
+                self.task_entry.icursor("end")
+                self.task_entry.focus_set()
+                self.current_task = new_text
+                return
+        else:
+            self.current_task = task_val
+            self._show_timer_view()
+
+    def _activate_task(self, task_id):
+        """Click-to-focus: highlight task, set session label, and sync tree species."""
+        if self.session_active:
+            return
+        task = db.get_task_by_id(task_id)
+        if not task:
+            return
+        self.active_task_id = task["id"]
+        db.set_setting("active_task_id", str(task["id"]))
+        self.current_task = task["title"]
+        self.selected_species = task["tree_species"]
         self._show_timer_view()
+
+    def _change_task_species(self, task_id, species_id):
+        updated = db.update_task_species(task_id, species_id)
+        if updated and self.active_task_id == task_id:
+            self.selected_species = updated["tree_species"]
+        self._show_timer_view()
+
+    def _toggle_task_item(self, task_id, text_label=None, check_label=None):
+        """Toggle completion with a smooth strikethrough animation when checking off."""
+        task = db.get_task_by_id(task_id)
+        if not task:
+            return
+        if not task["completed"] and text_label is not None and text_label.winfo_exists():
+            # Smooth strikethrough & dim animation (~180ms across 4 steps)
+            try:
+                if check_label is not None and check_label.winfo_exists():
+                    check_label.configure(text="☑", fg=THEME["accent"])
+                text_label.configure(font=self.font_small_strike)
+            except tk.TclError:
+                pass
+
+            def _anim_step(step):
+                if step >= 4:
+                    db.set_task_completed(task_id, True)
+                    if self.active_task_id == task_id:
+                        self.active_task_id = None
+                        db.set_setting("active_task_id", "")
+                    self._show_timer_view()
+                    return
+                try:
+                    if text_label.winfo_exists():
+                        col = self._lerp_hex(THEME["fg"], THEME["fg_light"], step / 3.0)
+                        text_label.configure(fg=col)
+                except tk.TclError:
+                    pass
+                self.root.after(45, lambda s=step + 1: _anim_step(s))
+
+            self.root.after(30, lambda: _anim_step(1))
+        else:
+            db.toggle_task_completed(task_id)
+            self._show_timer_view()
+
+    def _delete_task_item(self, task_id):
+        db.delete_task(task_id)
+        if self.active_task_id == task_id:
+            self.active_task_id = None
+            db.set_setting("active_task_id", "")
+            self.current_task = "General Study"
+        self._show_timer_view()
+
+    def _hide_task_tooltip(self):
+        if self._task_tooltip is not None:
+            try:
+                if self._task_tooltip.winfo_exists():
+                    self._task_tooltip.destroy()
+            except Exception:
+                pass
+            self._task_tooltip = None
+
+    def _show_task_tooltip(self, widget, full_text):
+        self._hide_task_tooltip()
+        tip = tk.Toplevel(self.root)
+        tip.overrideredirect(True)
+        tip.configure(bg=THEME["border"], padx=1, pady=1)
+        try:
+            tip.attributes("-topmost", True)
+        except Exception:
+            pass
+        lbl = tk.Label(
+            tip, text=full_text, font=self.font_xs,
+            bg=THEME["bg_card"], fg=THEME["fg"], padx=7, pady=3, wraplength=240, justify="left"
+        )
+        lbl.pack()
+        tip.update_idletasks()
+        x = widget.winfo_rootx() + 6
+        y = widget.winfo_rooty() - tip.winfo_reqheight() - 4
+        if y < 10:
+            y = widget.winfo_rooty() + widget.winfo_height() + 4
+        tip.geometry(f"+{x}+{y}")
+        self._task_tooltip = tip
+
+    def _build_task_list_widget(self, parent, is_compact=False, is_short=False):
+        """Render the compact scrollable task list (capped at ~155px height)."""
+        tasks = db.get_tasks()
+        max_h = 108 if (is_compact or is_short) else 155
+
+        if not tasks:
+            empty_box = tk.Frame(
+                parent, bg=THEME["bg_dark"], padx=12, pady=10,
+                highlightbackground=THEME["border"], highlightthickness=1
+            )
+            empty_box.pack(fill="x", pady=(2, 0))
+            empty_lbl = tk.Label(
+                empty_box, text="No tasks yet — add one above & assign a tree 🌱",
+                font=self.font_xs, fg=THEME["fg_light"], bg=THEME["bg_dark"],
+                anchor="w", justify="left", wraplength=200
+            )
+            empty_lbl.pack(fill="x")
+            empty_box.bind(
+                "<Configure>",
+                lambda e, lbl=empty_lbl: lbl.configure(wraplength=max(120, e.width - 26))
+            )
+            return
+
+        list_wrap = tk.Frame(parent, bg=THEME["bg_card"])
+        list_wrap.pack(fill="x", pady=(2, 0))
+
+        row_h = 31
+        est_h = min(max_h, len(tasks) * row_h + 4)
+
+        canvas = tk.Canvas(
+            list_wrap, bg=THEME["bg_card"], highlightthickness=0, height=est_h
+        )
+        scrollbar = tk.Scrollbar(list_wrap, orient="vertical", command=canvas.yview, width=8)
+        inner = tk.Frame(canvas, bg=THEME["bg_card"])
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_cfg(e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            req_h = inner.winfo_reqheight()
+            canvas.configure(height=min(max_h, max(32, req_h)))
+
+        inner.bind("<Configure>", _on_inner_cfg)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win_id, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="x", expand=True)
+        if len(tasks) * row_h > max_h:
+            scrollbar.pack(side="right", fill="y", padx=(2, 0))
+
+        def _on_wheel(e):
+            if len(tasks) * row_h > max_h:
+                canvas.yview_scroll(-1 * (e.delta // 120), "units")
+
+        canvas.bind("<MouseWheel>", _on_wheel)
+
+        max_chars = 18 if is_compact else 23
+        for task in tasks:
+            tid = task["id"]
+            is_done = bool(task["completed"])
+            is_active = (tid == self.active_task_id and not is_done)
+
+            if is_active:
+                row_bg = THEME["accent_light"]
+                row_bd = THEME["accent"]
+            elif is_done:
+                row_bg = THEME["bg_card"]
+                row_bd = THEME["border"]
+            else:
+                row_bg = THEME["bg_dark"]
+                row_bd = THEME["border"]
+
+            row = tk.Frame(
+                inner, bg=row_bg, padx=6, pady=4,
+                highlightbackground=row_bd, highlightthickness=1, cursor="hand2"
+            )
+            row.pack(fill="x", pady=(0, 3))
+            row.bind("<MouseWheel>", _on_wheel)
+
+            # Checkbox
+            chk_txt = "☑" if is_done else "☐"
+            chk_fg = THEME["accent"] if is_done else (THEME["green_dark"] if is_active else THEME["fg_muted"])
+            chk_lbl = tk.Label(
+                row, text=chk_txt, font=self.font_small_bold,
+                bg=row_bg, fg=chk_fg, cursor="hand2", padx=2
+            )
+            chk_lbl.pack(side="left", padx=(0, 4))
+
+            # Task title (truncated cleanly with tooltip on hover)
+            full_title = task["title"]
+            disp_title = full_title if len(full_title) <= max_chars else (full_title[:max_chars - 1].rstrip() + "…")
+            txt_font = self.font_small_strike if is_done else (self.font_small_bold if is_active else self.font_small)
+            txt_fg = THEME["fg_light"] if is_done else (THEME["green_dark"] if is_active else THEME["fg"])
+            txt_lbl = tk.Label(
+                row, text=disp_title, font=txt_font,
+                bg=row_bg, fg=txt_fg, anchor="w", cursor="hand2"
+            )
+            txt_lbl.pack(side="left", fill="x", expand=True)
+
+            # Delete (×) button (appears subtly on hover)
+            del_lbl = tk.Label(
+                row, text="×", font=self.font_small_bold,
+                bg=row_bg, fg=row_bg, cursor="hand2", padx=3
+            )
+            del_lbl.pack(side="right", padx=(2, 0))
+
+            # Assigned Tree Badge (clickable to reassign tree)
+            sp_meta = SPECIES_METADATA.get(task["tree_species"], SPECIES_METADATA["oak"])
+            badge_bg = THEME["bg_card"] if not is_done else THEME["bg_dark"]
+            tree_badge = tk.Label(
+                row, text=sp_meta["icon"], font=self.font_xs,
+                bg=badge_bg, fg=THEME["fg"], padx=4, pady=1, cursor="hand2",
+                highlightbackground=THEME["border"], highlightthickness=1
+            )
+            tree_badge.pack(side="right", padx=(4, 0))
+
+            # Bindings
+            chk_lbl.bind(
+                "<Button-1>",
+                lambda e, i=tid, tl=txt_lbl, cl=chk_lbl: self._toggle_task_item(i, tl, cl)
+            )
+            del_lbl.bind("<Button-1>", lambda e, i=tid: self._delete_task_item(i))
+            del_lbl.bind("<Enter>", lambda e, w=del_lbl: w.configure(fg="#C95B48"))
+            del_lbl.bind("<Leave>", lambda e, w=del_lbl: w.configure(fg=THEME["fg_muted"]))
+
+            tree_badge.bind(
+                "<Button-1>",
+                lambda e, w=tree_badge, i=tid, sp=task["tree_species"]: self._open_species_popover(
+                    w, sp, lambda new_sp, task_id=i: self._change_task_species(task_id, new_sp)
+                )
+            )
+
+            # Click-to-focus on row & title
+            row.bind("<Button-1>", lambda e, i=tid: self._activate_task(i))
+            txt_lbl.bind("<Button-1>", lambda e, i=tid: self._activate_task(i))
+
+            # Hover reveal for delete button + tooltip for task name
+            def _on_row_enter(e, d=del_lbl, tl=txt_lbl, full=full_title):
+                try:
+                    d.configure(fg=THEME["fg_muted"])
+                except tk.TclError:
+                    pass
+                if len(full) > max_chars:
+                    self._show_task_tooltip(tl, full)
+
+            def _on_row_leave(e, r=row, d=del_lbl, rb=row_bg):
+                try:
+                    px, py = r.winfo_pointerxy()
+                    w_under = r.winfo_containing(px, py)
+                    if w_under is not None and (w_under == r or w_under.master == r):
+                        return
+                except Exception:
+                    pass
+                try:
+                    d.configure(fg=rb)
+                except tk.TclError:
+                    pass
+                self._hide_task_tooltip()
+
+            row.bind("<Enter>", _on_row_enter)
+            row.bind("<Leave>", _on_row_leave)
+            txt_lbl.bind("<Enter>", _on_row_enter)
+            txt_lbl.bind("<Leave>", _on_row_leave)
+            txt_lbl.bind("<MouseWheel>", _on_wheel)
+
+    # ──────────────── Timer Logic ────────────────
 
     def _select_species(self, species_id):
         if self.session_active:
@@ -1617,7 +2052,9 @@ class GrowYourForestApp:
             pass
 
     def _start_session(self):
-        if hasattr(self, "task_entry"):
+        self._close_task_popover()
+        self._hide_task_tooltip()
+        if hasattr(self, "task_entry") and not getattr(self.task_entry, "_is_placeholder", False):
             val = self.task_entry.get().strip()
             if val:
                 self.current_task = val
@@ -1688,7 +2125,24 @@ class GrowYourForestApp:
                 ach_names = ", ".join(a["icon"] + " " + a["name"] for a in newly_unlocked)
                 msg += f"\n\n🏆 New achievements: {ach_names}"
 
-            self.root.after(100, lambda: messagebox.showinfo("Session Complete! 🌱", msg))
+            active_t = db.get_task_by_id(self.active_task_id) if self.active_task_id is not None else None
+            if active_t and not active_t["completed"]:
+                def _prompt_complete(t_obj=active_t, m=msg):
+                    if messagebox.askyesno(
+                        "Session Complete! 🌱",
+                        f"{m}\n\n✅ Mark task \"{t_obj['title']}\" complete?"
+                    ):
+                        db.set_task_completed(t_obj["id"], True)
+                        if self.active_task_id == t_obj["id"]:
+                            self.active_task_id = None
+                            db.set_setting("active_task_id", "")
+                        if self.current_view == "timer":
+                            self._show_timer_view()
+                        elif self.current_view == "forest":
+                            self._show_forest_view()
+                self.root.after(100, _prompt_complete)
+            else:
+                self.root.after(100, lambda m=msg: messagebox.showinfo("Session Complete! 🌱", m))
 
         self.focused_seconds = 0.0
         self._refresh_streak()
@@ -1973,7 +2427,7 @@ class GrowYourForestApp:
         total_trees = db.get_total_trees()
         total_hours = db.get_total_focused_seconds() / 3600
         streak = db.get_streak()
-        completed = db.get_completed_count()
+        completed = db.get_completed_count() + db.get_completed_tasks_count()
 
         for icon, value, label in [
             ("🌳", str(total_trees), "Trees"),
@@ -2204,11 +2658,12 @@ class GrowYourForestApp:
                         tags=(tag,),
                     )
 
-                hit_r = max(24, int(48 * scale))
+                hit_r = max(30, int(56 * scale))
                 self._forest_trees.append({
                     "tree": tree,
                     "cx": cx_t,
                     "cy": ground_y,
+                    "scale": scale,
                     "hit_r": hit_r,
                     "tag": tag,
                 })
@@ -2235,17 +2690,35 @@ class GrowYourForestApp:
     # ── Forest click / popup with Task Support ────────────────
 
     def _on_forest_click(self, event):
-        """Handle click on forest canvas — find nearest tree and show popup."""
+        """Handle click on forest canvas — find clicked or nearest tree and show popup."""
         self._dismiss_forest_popup()
 
         mx, my = event.x, event.y
         best = None
-        best_dist = 999999
-        for entry in self._forest_trees:
-            d = ((mx - entry["cx"]) ** 2 + (my - entry["cy"]) ** 2) ** 0.5
-            if d < entry["hit_r"] and d < best_dist:
-                best_dist = d
-                best = entry
+
+        # 1. Exact canvas tag hit check (clicking anywhere on tree trunk, canopy, or label pill)
+        overlaps = self.forest_canvas.find_overlapping(mx - 4, my - 4, mx + 4, my + 4)
+        tag_map = {entry["tag"]: entry for entry in self._forest_trees if "tag" in entry}
+        for item_id in reversed(overlaps):
+            for t in self.forest_canvas.gettags(item_id):
+                if t in tag_map:
+                    best = tag_map[t]
+                    break
+            if best:
+                break
+
+        # 2. Fallback proximity check along trunk-to-canopy vertical span
+        if not best:
+            best_dist = 999999
+            for entry in self._forest_trees:
+                sc = entry.get("scale", 0.5)
+                y_top = entry["cy"] - int(85 * sc)
+                y_bot = entry["cy"] + 10
+                clamped_y = max(y_top, min(y_bot, my))
+                d = ((mx - entry["cx"]) ** 2 + (my - clamped_y) ** 2) ** 0.5
+                if d < entry["hit_r"] and d < best_dist:
+                    best_dist = d
+                    best = entry
 
         if best:
             self._show_tree_popup(best["tree"], best["cx"], best["cy"])
@@ -2275,15 +2748,8 @@ class GrowYourForestApp:
                 padx=0, pady=0
             )
 
-            popup_w, popup_h = 240, 205
-            px = cx - popup_w // 2
-            py = cy - popup_h - 20
-            if px < 5: px = 5
-            if px + popup_w > w_c - 5: px = w_c - popup_w - 5
-            if py < 5: py = cy + 20
-
-            popup.place(x=px, y=py, width=popup_w, height=popup_h)
-
+            popup_w = 248
+            # Build contents first, then size popup to its natural reqheight so Remove button is never clipped
             # Header strip
             hdr = tk.Frame(popup, bg=meta.get("theme_color", THEME["accent"]), height=34)
             hdr.pack(fill="x")
@@ -2344,13 +2810,27 @@ class GrowYourForestApp:
                 text="🗑  Remove this tree",
                 font=self.font_xs_bold,
                 bg=del_bg, fg=del_fg,
-                padx=6, pady=3, cursor="hand2",
+                padx=8, pady=5, cursor="hand2",
                 highlightbackground=del_border, highlightthickness=1
             )
-            del_btn.pack(fill="x", pady=(5, 0))
+            del_btn.pack(fill="x", pady=(6, 2))
             del_btn.bind("<Button-1>", lambda e, tid=tree["id"]: self._delete_tree(tid))
             del_btn.bind("<Enter>", lambda e: del_btn.configure(bg=del_hover))
             del_btn.bind("<Leave>", lambda e: del_btn.configure(bg=del_bg))
+
+            popup.update_idletasks()
+            popup_h = max(220, popup.winfo_reqheight() + 4)
+            px = cx - popup_w // 2
+            py = cy - popup_h - 20
+            if px < 5:
+                px = 5
+            if px + popup_w > w_c - 5:
+                px = max(5, w_c - popup_w - 5)
+            if py < 5:
+                py = cy + 20
+            if py + popup_h > h_c - 5:
+                py = max(5, h_c - popup_h - 5)
+            popup.place(x=px, y=py, width=popup_w, height=popup_h)
 
             self._forest_popup = popup
         except tk.TclError:
@@ -2391,6 +2871,7 @@ class GrowYourForestApp:
             icon="warning"
         ):
             db.delete_tree(session_id)
+            self._refresh_streak()
             self._show_forest_view()
 
     # ──────────────── Statistics View ────────────────
@@ -2459,7 +2940,7 @@ class GrowYourForestApp:
         weekly_secs = db.get_weekly_seconds()
         total_secs = db.get_total_focused_seconds()
         total_trees = db.get_total_trees()
-        completed = db.get_completed_count()
+        completed = db.get_completed_count() + db.get_completed_tasks_count()
         streak = db.get_streak()
 
         card_data = [

@@ -104,6 +104,18 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            tree_species TEXT NOT NULL DEFAULT 'oak',
+            completed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     # Insert default achievements if not exist
     achievements = [
         ("first_seed", "First Seed", "Complete your first study session", "🌱"),
@@ -497,8 +509,122 @@ def set_setting(key, value):
     conn.close()
 
 
+# ──────────────── Task List Persistence ────────────────
+
+
+def get_tasks():
+    """Return all tasks ordered with active tasks first and completed tasks at the bottom."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, COALESCE(tree_species, 'oak') AS tree_species,
+               completed, created_at, completed_at, sort_order
+        FROM tasks
+        ORDER BY completed ASC, completed_at DESC, sort_order ASC, id DESC
+    """)
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_task_by_id(task_id):
+    """Fetch a single task by ID, or None if not found."""
+    if task_id is None:
+        return None
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, COALESCE(tree_species, 'oak') AS tree_species,
+               completed, created_at, completed_at, sort_order
+        FROM tasks WHERE id = ?
+    """, (int(task_id),))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def add_task(title, tree_species="oak"):
+    """Insert a new task assigned to a tree species and return the created task dict."""
+    clean_title = (title or "").strip()
+    if not clean_title:
+        return None
+    species = tree_species or "oak"
+    now = datetime.now().isoformat()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO tasks (title, tree_species, completed, created_at, completed_at, sort_order)
+        VALUES (?, ?, 0, ?, NULL, 0)
+    """, (clean_title, species, now))
+    task_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return get_task_by_id(task_id)
+
+
+def set_task_completed(task_id, completed=True):
+    """Explicitly mark a task completed or incomplete."""
+    if task_id is None:
+        return None
+    val = 1 if completed else 0
+    comp_at = datetime.now().isoformat() if val else None
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE tasks SET completed = ?, completed_at = ? WHERE id = ?",
+        (val, comp_at, int(task_id)),
+    )
+    conn.commit()
+    conn.close()
+    return get_task_by_id(task_id)
+
+
+def toggle_task_completed(task_id):
+    """Toggle a task's completion status and return the updated task dict."""
+    task = get_task_by_id(task_id)
+    if not task:
+        return None
+    return set_task_completed(task_id, not bool(task["completed"]))
+
+
+def update_task_species(task_id, tree_species):
+    """Update the tree species assigned to a task."""
+    if task_id is None:
+        return None
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE tasks SET tree_species = ? WHERE id = ?",
+        (tree_species or "oak", int(task_id)),
+    )
+    conn.commit()
+    conn.close()
+    return get_task_by_id(task_id)
+
+
+def delete_task(task_id):
+    """Delete a task by ID."""
+    if task_id is None:
+        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM tasks WHERE id = ?", (int(task_id),))
+    conn.commit()
+    conn.close()
+
+
+def get_completed_tasks_count():
+    """Return total number of completed tasks in the task list."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM tasks WHERE completed = 1")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+
 def export_backup_data():
-    """Collect sessions, daily logs, achievements, and settings into a JSON-serializable dict."""
+    """Collect sessions, daily logs, achievements, tasks, and settings into a JSON-serializable dict."""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -526,17 +652,26 @@ def export_backup_data():
     """)
     achievements = [dict(r) for r in cursor.fetchall()]
 
+    cursor.execute("""
+        SELECT id, title, COALESCE(tree_species, 'oak') AS tree_species,
+               completed, created_at, completed_at, sort_order
+        FROM tasks
+        ORDER BY id ASC
+    """)
+    tasks = [dict(r) for r in cursor.fetchall()]
+
     cursor.execute("SELECT key, value FROM settings")
     settings = {r["key"]: r["value"] for r in cursor.fetchall()}
 
     conn.close()
     return {
         "app": "Grow Your Forest",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "exported_at": datetime.now().isoformat(),
         "sessions": sessions,
         "daily_log": daily_log,
         "achievements": achievements,
+        "tasks": tasks,
         "settings": settings,
     }
 
@@ -550,15 +685,16 @@ def export_to_json_file(filepath):
 
 
 def import_backup_data(data):
-    """Restore sessions, daily study history, streaks, achievements, and settings from a backup dict."""
+    """Restore sessions, daily study history, streaks, achievements, tasks, and settings from a backup dict."""
     if not isinstance(data, dict) or not any(
-        k in data for k in ("sessions", "daily_log", "achievements", "settings")
+        k in data for k in ("sessions", "daily_log", "achievements", "tasks", "settings")
     ):
         raise ValueError("Invalid Grow Your Forest backup file.")
 
     sessions = data.get("sessions") or []
     daily_log = data.get("daily_log") or []
     achievements = data.get("achievements") or []
+    tasks = data.get("tasks") or []
     settings = data.get("settings") or {}
 
     if not isinstance(sessions, list) or not isinstance(daily_log, list):
@@ -632,6 +768,41 @@ def import_backup_data(data):
                         (a.get("unlocked_at") or datetime.now().isoformat(), a["id"]),
                     )
 
+        tasks_restored = 0
+        if isinstance(tasks, list):
+            for t in tasks:
+                if not isinstance(t, dict) or not t.get("title"):
+                    continue
+                tid = t.get("id")
+                if tid is not None:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO tasks (
+                            id, title, tree_species, completed, created_at, completed_at, sort_order
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        int(tid),
+                        str(t["title"]),
+                        t.get("tree_species", "oak") or "oak",
+                        1 if t.get("completed") else 0,
+                        t.get("created_at") or datetime.now().isoformat(),
+                        t.get("completed_at"),
+                        int(t.get("sort_order", 0)),
+                    ))
+                else:
+                    cursor.execute("""
+                        INSERT INTO tasks (
+                            title, tree_species, completed, created_at, completed_at, sort_order
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(t["title"]),
+                        t.get("tree_species", "oak") or "oak",
+                        1 if t.get("completed") else 0,
+                        t.get("created_at") or datetime.now().isoformat(),
+                        t.get("completed_at"),
+                        int(t.get("sort_order", 0)),
+                    ))
+                tasks_restored += 1
+
         if isinstance(settings, dict):
             for k, v in settings.items():
                 if k and v is not None:
@@ -653,6 +824,7 @@ def import_backup_data(data):
         "sessions_restored": len(sessions),
         "days_restored": len(daily_log),
         "achievements_restored": unlocked_restored,
+        "tasks_restored": tasks_restored,
     }
 
 

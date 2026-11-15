@@ -15,7 +15,7 @@ import tarfile
 import time
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = "1.0.1"
+VERSION = "1.0.3"
 PKG_NAME = "grow-your-forest"
 PKG_ARCH = "all"
 DEB_FILENAME = f"{PKG_NAME}_{VERSION}_{PKG_ARCH}.deb"

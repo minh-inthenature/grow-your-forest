@@ -19,11 +19,11 @@ A cozy desktop focus timer built with Python & Tkinter. Complete study/focus ses
 2. Double-click **`GrowYourForest.exe`** directly — no Python installation required! Your progress is saved in `forest_data.db` right next to the executable.
 
 ### Option 2: Ubuntu / Debian (.deb Package)
-1. Download **`grow-your-forest_1.0.1_all.deb`** from [**Releases**](../../releases).
+1. Download **`grow-your-forest_1.0.3_all.deb`** from [**Releases**](../../releases).
 2. Install via terminal:
    ```bash
    sudo apt update
-   sudo apt install ./grow-your-forest_1.0.1_all.deb
+   sudo apt install ./grow-your-forest_1.0.3_all.deb
    ```
    *(or double-click the `.deb` file to open in Ubuntu Software / App Center)*.
 3. Launch **Grow Your Forest** directly from your application dock, or run `grow-your-forest` in terminal!
