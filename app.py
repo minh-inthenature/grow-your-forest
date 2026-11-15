@@ -969,6 +969,19 @@ class GrowYourForestApp:
                 )
             except Exception:
                 pass
+        elif sys.platform.startswith("linux"):
+            try:
+                import subprocess
+                variant = "dark" if is_dark else "light"
+                wid = self.root.winfo_id()
+                if wid:
+                    subprocess.Popen(
+                        ["xprop", "-id", str(wid), "-f", "_GTK_THEME_VARIANT", "8s", "-set", "_GTK_THEME_VARIANT", variant],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+            except Exception:
+                pass
 
     def _set_theme(self, theme_id):
         """Switch visual mode with a smooth palette transition across the app and persist."""
@@ -2980,9 +2993,17 @@ def main():
     root = tk.Tk()
     base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     icon_path = os.path.join(base_dir, "forest.ico")
-    if os.path.exists(icon_path):
+    png_path = os.path.join(base_dir, "forest.png")
+    if sys.platform.startswith("win") and os.path.exists(icon_path):
         try:
             root.iconbitmap(icon_path)
+        except Exception:
+            pass
+    elif os.path.exists(png_path):
+        try:
+            img = tk.PhotoImage(file=png_path)
+            root.iconphoto(True, img)
+            root._icon_img = img
         except Exception:
             pass
 

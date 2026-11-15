@@ -12,25 +12,36 @@ A cozy desktop focus timer built with Python & Tkinter. Complete study/focus ses
 
 ---
 
-## Quick Setup on Another Windows Computer
+## Quick Setup
 
-### Option 1: Portable Release ZIP (Recommended — No Git needed)
+### Option 1: Standalone Windows Executable (.exe)
+1. Download **`GrowYourForest.exe`** from [**Releases**](../../releases).
+2. Double-click **`GrowYourForest.exe`** directly — no Python installation required! Your progress is saved in `forest_data.db` right next to the executable.
 
-1. Go to the [**Releases**](../../releases) page and download **`GrowYourForest-Portable.zip`** (or **`GrowYourForest.exe`** if attached).
-2. Right-click `GrowYourForest-Portable.zip` → **Extract All...** into a folder you want to keep (for example `Documents\GrowYourForest`).
-3. **If using `GrowYourForest-Portable.zip`**:
-   - Requires Python 3 with Tkinter (standard on the official [Python for Windows](https://www.python.org/downloads/) installer — check **"Add Python to PATH"** during setup, no `pip install` packages required!).
-   - Double-click **`run.bat`** to start the app.
-   - *(Optional)* Double-click **`create_shortcut.bat`** to place a **Grow Your Forest** icon on your Desktop.
-4. **If using standalone `GrowYourForest.exe`** *(built automatically by GitHub Actions)*:
-   - Double-click **`GrowYourForest.exe`** directly — no Python installation required! Your progress is saved in `forest_data.db` right next to the `.exe`.
+### Option 2: Ubuntu / Debian (.deb Package)
+1. Download **`grow-your-forest_1.0.1_all.deb`** from [**Releases**](../../releases).
+2. Install via terminal:
+   ```bash
+   sudo apt update
+   sudo apt install ./grow-your-forest_1.0.1_all.deb
+   ```
+   *(or double-click the `.deb` file to open in Ubuntu Software / App Center)*.
+3. Launch **Grow Your Forest** directly from your application dock, or run `grow-your-forest` in terminal!
 
-### Option 2: Clone with Git
+### Option 3: Portable Release ZIP (Windows)
+1. Go to the [**Releases**](../../releases) page and download **`GrowYourForest-Portable.zip`**.
+2. Right-click `GrowYourForest-Portable.zip` → **Extract All...** into a folder you want to keep.
+3. Double-click **`run.bat`** to start the app (or **`create_shortcut.bat`** to put an icon on your Desktop). Requires standard Python 3.
 
-```bat
+### Option 4: Clone with Git (Cross-Platform)
+
+```bash
 git clone https://github.com/minh-inthenature/grow-your-forest.git
 cd grow-your-forest
+# Windows:
 run.bat
+# Linux / macOS:
+python3 app.py
 ```
 
 Zero third-party Python dependencies are required — only Python's standard library (`tkinter`, `sqlite3`, `math`, `random`, etc.) plus Windows PowerShell / MediaPlayer for background rain audio.

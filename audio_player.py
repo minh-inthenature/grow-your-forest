@@ -35,6 +35,9 @@ class RainSoundPlayer:
         self.volume = 70  # 0 to 100
         self._current_output_volume = 0
         self.last_ramp_ms = 0
+        self._linux_active = False
+        self._linux_proc = None
+        self._linux_thread = None
         self._ps_ramp_gen = 0
         self._lock = threading.Lock()
 
@@ -362,11 +365,70 @@ class RainSoundPlayer:
 
         threading.Thread(target=_worker, daemon=True, name="RainPSRamp").start()
 
+    # ──────────────── Linux Audio Support ────────────────
+
+    def _find_linux_player(self):
+        import shutil
+        for player in ("mpv", "ffplay", "paplay", "pw-play", "aplay"):
+            if shutil.which(player):
+                return player
+        return None
+
+    def _play_linux(self):
+        self._stop_linux()
+        backend = self._find_linux_player()
+        if not backend:
+            self.is_playing = True
+            return True
+
+        target_path = self._target_path()
+        wav_path = os.path.join(BASE_DIR, "rain_master.wav")
+        play_path = wav_path if (backend in ("paplay", "pw-play", "aplay") and os.path.exists(wav_path)) else target_path
+
+        def _linux_loop():
+            while self._linux_active:
+                if backend == "mpv":
+                    cmd = ["mpv", "--no-video", "--loop=inf", f"--volume={self.volume}", play_path]
+                elif backend == "ffplay":
+                    cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-loop", "0", play_path]
+                elif backend in ("paplay", "pw-play", "aplay"):
+                    cmd = [backend, play_path]
+                else:
+                    break
+                try:
+                    self._linux_proc = subprocess.Popen(
+                        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                    self._linux_proc.wait()
+                except Exception:
+                    break
+                if backend in ("mpv", "ffplay"):
+                    break
+
+        self._linux_active = True
+        self._linux_thread = threading.Thread(target=_linux_loop, daemon=True, name="LinuxRainLoop")
+        self._linux_thread.start()
+        self.is_playing = True
+        return True
+
+    def _stop_linux(self):
+        self._linux_active = False
+        if self._linux_proc and self._linux_proc.poll() is None:
+            try:
+                self._linux_proc.terminate()
+            except Exception:
+                pass
+            self._linux_proc = None
+        self.is_playing = False
+
     # ──────────────── Public API ────────────────
 
     def play(self):
         """Start playing ambient rain sound in an infinite loop with a 400ms fade-in."""
         with self._lock:
+            if sys.platform.startswith("linux"):
+                return self._play_linux()
+
             if self._ensure_mci_worker():
                 res = self._mci_request("PLAY")
                 if res and res.get("ok"):
@@ -387,6 +449,10 @@ class RainSoundPlayer:
     def stop(self):
         """Fade out ambient rain sound smoothly over 400ms before stopping."""
         with self._lock:
+            if sys.platform.startswith("linux"):
+                self._stop_linux()
+                return
+
             if self._worker is not None and self._worker.is_alive():
                 self._mci_request("STOP")
             if self._proc and self._proc.poll() is None:
@@ -433,6 +499,10 @@ class RainSoundPlayer:
     def stop_service(self):
         """Clean shutdown of background audio worker/service."""
         with self._lock:
+            if sys.platform.startswith("linux"):
+                self._stop_linux()
+                return
+
             if self._worker is not None and self._worker.is_alive() and self._cmd_queue is not None:
                 try:
                     self._mci_request("QUIT", timeout=1.5)

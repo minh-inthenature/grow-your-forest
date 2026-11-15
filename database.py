@@ -11,7 +11,37 @@ from datetime import datetime, date, timedelta
 
 
 APP_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(APP_DIR, "forest_data.db")
+
+
+def _determine_db_path():
+    local_path = os.path.join(APP_DIR, "forest_data.db")
+    # If app directory is writable (portable mode / local dev)
+    try:
+        test_file = os.path.join(APP_DIR, ".test_write")
+        with open(test_file, "w") as f:
+            f.write("1")
+        os.remove(test_file)
+        return local_path
+    except Exception:
+        # System-installed / read-only location (e.g. /usr/share/grow-your-forest on Ubuntu)
+        if sys.platform.startswith("win"):
+            data_home = os.environ.get("APPDATA", os.path.expanduser("~"))
+            target_dir = os.path.join(data_home, "GrowYourForest")
+        else:
+            data_home = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+            target_dir = os.path.join(data_home, "grow-your-forest")
+        os.makedirs(target_dir, exist_ok=True)
+        user_db = os.path.join(target_dir, "forest_data.db")
+        if not os.path.exists(user_db) and os.path.exists(local_path):
+            import shutil
+            try:
+                shutil.copy2(local_path, user_db)
+            except Exception:
+                pass
+        return user_db
+
+
+DB_PATH = _determine_db_path()
 
 
 def get_connection():
