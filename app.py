@@ -539,6 +539,33 @@ class GrowYourForestApp:
         self._resize_layout_after = None
         self._last_layout_state = self._get_layout_state()
 
+        # ── Custom Session Complete Modal State ──
+        self._session_modal_backdrop = None
+        self._session_modal_card = None
+        self._session_modal_anim_after = None
+        self._session_modal_root_binds = []
+        self._session_modal_continue_btn = None
+        self._session_modal_mark_complete_btn = None
+        self._session_modal_info = None
+        self._timer_base_pt = 44
+        self._timer_avail_w = 240
+        self._timer_font_cache = {}
+        self._last_timer_font_pt = None
+        self.session_had_pause = False
+        self._daily_countdown_after = None
+        self.daily_challenge_cards = []
+        self.daily_countdown_label = None
+        self.seed_inventory_badge = None
+        self.ach_filter = "all"
+        self.ach_filter_buttons = {}
+        self._claim_pulse_after = None
+        self._claim_pulse_phase = 0
+        self._claim_pulse_buttons = []
+        self.active_quest = None
+        self.active_quest_banner = None
+        self._species_dropdown = None
+        self.species_dropdown_btn = None
+
         # ── Navigation ──
         self.current_view = "timer"
 
@@ -1218,10 +1245,25 @@ class GrowYourForestApp:
         cmd()
 
     def _clear_content(self):
+        if self._daily_countdown_after is not None:
+            try:
+                self.root.after_cancel(self._daily_countdown_after)
+            except tk.TclError:
+                pass
+            self._daily_countdown_after = None
+        if self._claim_pulse_after is not None:
+            try:
+                self.root.after_cancel(self._claim_pulse_after)
+            except tk.TclError:
+                pass
+            self._claim_pulse_after = None
+        self._claim_pulse_buttons = []
+        self._close_species_dropdown()
         self._close_task_popover()
         self._hide_task_tooltip()
         self._hide_stats_tooltip()
         self._dismiss_forest_popup()
+        self._dismiss_session_complete_modal()
         for w in self.content_frame.winfo_children():
             w.destroy()
 
@@ -1353,25 +1395,45 @@ class GrowYourForestApp:
             font=self.font_small, fg=THEME["fg_muted"], bg=THEME["bg"]
         ).pack(side="left", padx=(0, 5 if is_compact else 8))
 
-        species_list = [
-            ("cherry_blossom", "Cherry Blossom"),
-            ("pine", "Pine"),
-            ("angel_oak", "Angel Oak"),
-            ("oak", "Classic Oak"),
+        species_order = [
+            "cherry_blossom", "pine", "angel_oak", "oak",
+            "willow", "maple", "moonlit_blossom",
         ]
+        if not db.is_species_unlocked(self.selected_species):
+            self.selected_species = "oak"
 
         self.species_buttons = {}
-        for sp_id, sp_label in species_list:
-            is_active = (self.selected_species == sp_id)
-            meta = SPECIES_METADATA.get(sp_id, {})
-            active_bg = meta.get("theme_color", THEME["accent"])
-            btn = self._make_species_pill(
-                spec_bar, sp_id, sp_label, is_active, active_bg,
-                command=lambda s=sp_id: self._select_species(s),
-                enabled=(not self.session_active),
+        curr_meta = SPECIES_METADATA.get(self.selected_species, SPECIES_METADATA["oak"])
+        seed_inv = db.get_seed_inventory()
+        sp_seeds = seed_inv.get(self.selected_species, 0)
+        rarity = curr_meta.get("rarity", "Common")
+        seed_part = f"  •  🌱{sp_seeds}" if sp_seeds > 0 else ""
+        drop_text = f"{curr_meta['icon']} {curr_meta['name']}  •  {rarity}{seed_part}   ▾"
+
+        is_dark = self.current_theme in ("night", "chill")
+        drop_bg = THEME["bg_card"]
+        drop_fg = THEME["fg"]
+        drop_border = curr_meta.get("theme_color", THEME["border"])
+
+        self.species_dropdown_btn = tk.Label(
+            spec_bar, text=drop_text,
+            font=self.font_small_bold,
+            bg=drop_bg, fg=drop_fg,
+            padx=12, pady=4,
+            cursor="hand2" if not self.session_active else "",
+            highlightbackground=drop_border, highlightthickness=1,
+        )
+        self.species_dropdown_btn.pack(side="left")
+        if not self.session_active:
+            self.species_dropdown_btn.bind("<Button-1>", lambda e: self._toggle_species_dropdown())
+            self.species_dropdown_btn.bind(
+                "<Enter>", lambda e: self.species_dropdown_btn.configure(bg=THEME["bg_dark"])
             )
-            btn.pack(side="left", padx=(0, pill_gap))
-            self.species_buttons[sp_id] = btn
+            self.species_dropdown_btn.bind(
+                "<Leave>", lambda e: self.species_dropdown_btn.configure(bg=drop_bg)
+            )
+        else:
+            self.species_dropdown_btn.configure(fg=THEME["fg_muted"])
 
         # Species tagline (automatically hidden below 680px bar width so it never overlaps pills)
         curr_meta = SPECIES_METADATA.get(self.selected_species, {})
@@ -1571,18 +1633,51 @@ class GrowYourForestApp:
         custom_btn.pack(side="left")
         custom_btn.bind("<Button-1>", self._set_custom_duration)
 
-        # Timer display
+        # Optional Active Quest Banner when launched from a Daily Challenge
+        if self.active_quest:
+            aq_bg = scenery.mix(THEME["bg_card"], THEME["accent"], 0.14)
+            aq_pill = tk.Frame(
+                inner, bg=aq_bg,
+                highlightbackground=THEME["accent"], highlightthickness=1
+            )
+            aq_pill.pack(fill="x", pady=(0, 6))
+            self.active_quest_banner = aq_pill
+
+            aq_txt = f"🎯 Active Quest: {self.active_quest['title']} ({self.active_quest['duration']}m)"
+            tk.Label(
+                aq_pill, text=aq_txt, font=self.font_xs_bold,
+                fg=THEME["fg"], bg=aq_bg, anchor="w", padx=8, pady=4
+            ).pack(side="left", fill="x", expand=True)
+
+            aq_close = tk.Label(
+                aq_pill, text="×", font=self.font_small_bold,
+                fg=THEME["fg_muted"], bg=aq_bg, padx=7, pady=2, cursor="hand2"
+            )
+            aq_close.pack(side="right")
+            aq_close.bind("<Button-1>", lambda e: self._dismiss_active_quest())
+        else:
+            self.active_quest_banner = None
+
+        # Timer display (scales down cleanly for HH:MM:SS >= 60m & stays centered)
         timer_frame = tk.Frame(inner, bg=THEME["bg_card"])
         timer_frame.pack(fill="x", pady=(0, 4))
+
+        self._timer_base_pt = timer_pt
+        self._timer_avail_w = max(160, sidebar_w - 2 * inner_padx - 12)
+        self._last_timer_font_pt = None
 
         remaining = self.planned_duration - self.focused_seconds
         if remaining < 0:
             remaining = 0
+        timer_str = self._format_time(int(remaining))
+        t_font = self._get_timer_font(timer_str)
+        self._last_timer_font_pt = t_font[1]
         self.timer_display = tk.Label(
-            timer_frame, text=self._format_time(int(remaining)),
-            font=(self.family_mono, timer_pt, "bold"), fg=THEME["fg"], bg=THEME["bg_card"]
+            timer_frame, text=timer_str,
+            font=t_font, fg=THEME["fg"], bg=THEME["bg_card"],
+            anchor="center", justify="center"
         )
-        self.timer_display.pack()
+        self.timer_display.pack(fill="x", padx=4)
 
         # Progress info
         info_frame = tk.Frame(inner, bg=THEME["bg_card"])
@@ -1759,7 +1854,14 @@ class GrowYourForestApp:
         inner = tk.Frame(pop, bg=THEME["bg_card"], padx=4, pady=4)
         inner.pack(fill="both", expand=True)
 
-        for sp_id in ("cherry_blossom", "pine", "angel_oak", "oak"):
+        unlocked_list = [
+            sp_id for sp_id in (
+                "cherry_blossom", "pine", "angel_oak", "oak",
+                "willow", "maple", "moonlit_blossom",
+            )
+            if db.is_species_unlocked(sp_id)
+        ]
+        for sp_id in unlocked_list:
             meta = SPECIES_METADATA[sp_id]
             is_sel = (sp_id == current_species)
             row_bg = THEME["accent_light"] if is_sel else THEME["bg_card"]
@@ -1883,6 +1985,7 @@ class GrowYourForestApp:
             def _anim_step(step):
                 if step >= 4:
                     db.set_task_completed(task_id, True)
+                    db.record_daily_challenge_task_completed(1)
                     if self.active_task_id == task_id:
                         self.active_task_id = None
                         db.set_setting("active_task_id", "")
@@ -1898,7 +2001,9 @@ class GrowYourForestApp:
 
             self.root.after(30, lambda: _anim_step(1))
         else:
-            db.toggle_task_completed(task_id)
+            new_state = db.toggle_task_completed(task_id)
+            if new_state:
+                db.record_daily_challenge_task_completed(1)
             self._show_timer_view()
 
     def _delete_task_item(self, task_id):
@@ -2106,10 +2211,150 @@ class GrowYourForestApp:
 
     # ──────────────── Timer Logic ────────────────
 
+    def _close_species_dropdown(self):
+        """Close the top Tree Selector dropdown menu if open."""
+        self._hide_stats_tooltip()
+        bind_id = getattr(self, "_species_dropdown_root_bind", None)
+        if bind_id is not None:
+            try:
+                self.root.unbind("<Button-1>", bind_id)
+            except tk.TclError:
+                pass
+            self._species_dropdown_root_bind = None
+        if self._species_dropdown is not None:
+            try:
+                self._species_dropdown.destroy()
+            except tk.TclError:
+                pass
+            self._species_dropdown = None
+
+    def _toggle_species_dropdown(self):
+        """Open/close the Tree Selector dropdown listing all 7 species + unlock states."""
+        if self.session_active:
+            return
+        if self._species_dropdown is not None:
+            self._close_species_dropdown()
+            return
+        if self.species_dropdown_btn is None or not self.species_dropdown_btn.winfo_exists():
+            return
+
+        pop = tk.Toplevel(self.root)
+        pop.overrideredirect(True)
+        pop.configure(bg=THEME["border"], padx=1, pady=1)
+        try:
+            pop.attributes("-topmost", True)
+        except Exception:
+            pass
+        self._species_dropdown = pop
+
+        body = tk.Frame(pop, bg=THEME["bg_card"], padx=6, pady=6)
+        body.pack(fill="both", expand=True)
+
+        unlock_map = db.get_species_unlock_status()
+        seed_inv = db.get_seed_inventory()
+        species_order = [
+            "cherry_blossom", "pine", "angel_oak", "oak",
+            "willow", "maple", "moonlit_blossom",
+        ]
+
+        for sp_id in species_order:
+            meta = SPECIES_METADATA.get(sp_id, {})
+            unlocked, req_txt = unlock_map.get(sp_id, (False, "Locked"))
+            is_sel = (self.selected_species == sp_id)
+            cnt = seed_inv.get(sp_id, 0)
+            rarity = meta.get("rarity", "Common")
+
+            row_bg = scenery.mix(THEME["bg_card"], THEME["accent"], 0.16) if is_sel else THEME["bg_card"]
+            row = tk.Frame(
+                body, bg=row_bg, padx=8, pady=5,
+                cursor="hand2" if unlocked else ""
+            )
+            row.pack(fill="x", pady=1)
+
+            left_txt = f"{meta.get('icon', '🌱')} {meta.get('name', sp_id)}"
+            if not unlocked:
+                left_txt = f"🔒 {left_txt}"
+            lbl = tk.Label(
+                row, text=left_txt,
+                font=self.font_small_bold if is_sel else self.font_small,
+                fg=THEME["fg"] if unlocked else THEME["fg_light"],
+                bg=row_bg, anchor="w", width=20,
+                cursor="hand2" if unlocked else ""
+            )
+            lbl.pack(side="left")
+
+            right_parts = [rarity]
+            if cnt > 0:
+                right_parts.append(f"🌱{cnt}")
+            if is_sel:
+                right_parts.append("✓")
+            meta_lbl = tk.Label(
+                row, text="  •  ".join(right_parts),
+                font=self.font_xs_bold if is_sel else self.font_xs,
+                fg=THEME["accent"] if is_sel else (THEME["fg_muted"] if unlocked else THEME["fg_light"]),
+                bg=row_bg, anchor="e",
+                cursor="hand2" if unlocked else ""
+            )
+            meta_lbl.pack(side="right", padx=(10, 0))
+
+            if unlocked:
+                def _pick(e, sid=sp_id):
+                    self._close_species_dropdown()
+                    self._select_species(sid)
+                    return "break"
+                hover_bg = THEME["bg_dark"]
+                for w in (row, lbl, meta_lbl):
+                    w.bind("<Button-1>", _pick)
+                    w.bind("<Enter>", lambda e, r=row, l=lbl, m=meta_lbl, hb=hover_bg: (
+                        r.configure(bg=hb), l.configure(bg=hb), m.configure(bg=hb)
+                    ))
+                    w.bind("<Leave>", lambda e, r=row, l=lbl, m=meta_lbl, rb=row_bg: (
+                        r.configure(bg=rb), l.configure(bg=rb), m.configure(bg=rb)
+                    ))
+            else:
+                tip = f"Locked — {req_txt}"
+                for w in (row, lbl, meta_lbl):
+                    w.bind("<Enter>", lambda e, p=row, t=tip: self._show_stats_tooltip(p, t, e.x_root, e.y_root))
+                    w.bind("<Leave>", lambda e: self._hide_stats_tooltip())
+
+        pop.update_idletasks()
+        bx = self.species_dropdown_btn.winfo_rootx()
+        by = self.species_dropdown_btn.winfo_rooty() + self.species_dropdown_btn.winfo_height() + 4
+        pw = pop.winfo_reqwidth()
+        ph = pop.winfo_reqheight()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        if bx + pw > sw - 12:
+            bx = max(12, sw - pw - 12)
+        if by + ph > sh - 12:
+            by = max(12, self.species_dropdown_btn.winfo_rooty() - ph - 4)
+        pop.geometry(f"+{bx}+{by}")
+        pop.lift()
+        pop.focus_set()
+        pop.bind("<Escape>", lambda e: self._close_species_dropdown())
+
+        def _on_root_click(e):
+            if self._species_dropdown is None:
+                return
+            w = e.widget
+            if w is self.species_dropdown_btn:
+                return
+            try:
+                if w.winfo_toplevel() is self._species_dropdown:
+                    return
+            except Exception:
+                pass
+            self._close_species_dropdown()
+
+        self._species_dropdown_root_bind = self.root.bind("<Button-1>", _on_root_click, add="+")
+
     def _select_species(self, species_id):
         if self.session_active:
             return
+        if not db.is_species_unlocked(species_id):
+            return
         self.selected_species = species_id
+        db.set_setting("selected_species", species_id)
         self._show_timer_view()
 
     def _set_duration(self, minutes):
@@ -2139,6 +2384,7 @@ class GrowYourForestApp:
         self.session_active = True
         self.timer_running = True
         self.timer_paused = False
+        self.session_had_pause = False
         self.focused_seconds = 0.0
         self.last_tick_time = time.monotonic()
         self.session_start_time = datetime.now()
@@ -2154,6 +2400,7 @@ class GrowYourForestApp:
                 self.focused_seconds += now - self.last_tick_time
             self.timer_running = False
             self.timer_paused = True
+            self.session_had_pause = True
             self.last_tick_time = None
             self._show_timer_view()
 
@@ -2162,6 +2409,269 @@ class GrowYourForestApp:
         self.timer_paused = False
         self.last_tick_time = time.monotonic()
         self._show_timer_view()
+
+    def _clean_session_task_label(self, raw_task):
+        """Strip trailing whitespace/colons from task labels (e.g. 'Coding:' -> 'Coding')."""
+        txt = (raw_task or "").strip()
+        while txt.endswith(":"):
+            txt = txt[:-1].strip()
+        return txt or "General Study"
+
+    def _dismiss_session_complete_modal(self):
+        """Close the custom Session Complete modal overlay and card cleanly."""
+        if self._session_modal_anim_after is not None:
+            try:
+                self.root.after_cancel(self._session_modal_anim_after)
+            except tk.TclError:
+                pass
+            self._session_modal_anim_after = None
+
+        for seq, funcid in self._session_modal_root_binds:
+            try:
+                self.root.unbind(seq, funcid)
+            except tk.TclError:
+                pass
+        self._session_modal_root_binds = []
+
+        for attr in ("_session_modal_card", "_session_modal_backdrop"):
+            win = getattr(self, attr, None)
+            if win is not None:
+                try:
+                    win.destroy()
+                except tk.TclError:
+                    pass
+                setattr(self, attr, None)
+
+        self._session_modal_continue_btn = None
+        self._session_modal_mark_complete_btn = None
+
+    def _show_session_complete_modal(self, mins, species_id, stage, task_name, newly_unlocked=None, active_task=None):
+        """Show a centered, theme-matched modal card when a focus session completes."""
+        self._dismiss_session_complete_modal()
+        try:
+            self.root.update_idletasks()
+            rx = self.root.winfo_rootx()
+            ry = self.root.winfo_rooty()
+            rw = max(360, self.root.winfo_width())
+            rh = max(280, self.root.winfo_height())
+        except tk.TclError:
+            return
+
+        # ── Dimmed modal overlay ──
+        backdrop = tk.Toplevel(self.root)
+        backdrop.overrideredirect(True)
+        backdrop.transient(self.root)
+        backdrop.configure(bg="#000000")
+        backdrop.geometry(f"{rw}x{rh}+{rx}+{ry}")
+        try:
+            backdrop.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+        backdrop.bind("<Button-1>", lambda e: self._dismiss_session_complete_modal())
+        self._session_modal_backdrop = backdrop
+
+        # ── Modal card surface (max-width 380px, padding 24px, radius 16px) ──
+        card_w = min(380, max(280, rw - 48))
+        use_trans = sys.platform == "win32"
+        trans_key = "#010203"
+
+        card = tk.Toplevel(self.root)
+        card.overrideredirect(True)
+        card.transient(backdrop)
+        try:
+            card.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+        if use_trans:
+            card.configure(bg=trans_key)
+            try:
+                card.attributes("-transparentcolor", trans_key)
+            except tk.TclError:
+                use_trans = False
+                card.configure(bg=THEME["bg_card"])
+        else:
+            card.configure(bg=THEME["bg_card"])
+        self._session_modal_card = card
+
+        sp_meta = SPECIES_METADATA.get(species_id, {})
+        sp_icon = sp_meta.get("icon", "🌱")
+        sp_name = sp_meta.get("name", "Tree")
+        stage_raw = STAGE_LABELS.get(stage, "🌱 Seed")
+        clean_stage = stage_raw.split(" ", 1)[1] if " " in stage_raw else stage_raw
+        clean_task = self._clean_session_task_label(task_name)
+        mins_text = f"You focused for {mins} minute" + ("" if mins == 1 else "s")
+        species_stage_text = f"{sp_icon} {sp_name} • {clean_stage}"
+
+        self._session_modal_info = {
+            "mins": mins,
+            "mins_text": mins_text,
+            "species_id": species_id,
+            "species_name": sp_name,
+            "stage": stage,
+            "stage_label": clean_stage,
+            "species_stage_text": species_stage_text,
+            "task_label": clean_task,
+            "active_task_id": active_task["id"] if active_task else None,
+        }
+
+        inner = tk.Frame(card, bg=THEME["bg_card"])
+
+        # 1. Header: themed icon badge + Fraunces 'Session Complete!'
+        badge_cv = tk.Canvas(
+            inner, width=44, height=44, bg=THEME["bg_card"], highlightthickness=0
+        )
+        badge_cv.pack(pady=(0, 10))
+        badge_cv.create_oval(
+            2, 2, 42, 42,
+            fill=THEME["accent_light"], outline=THEME["border"], width=1
+        )
+        badge_cv.create_text(
+            22, 22, text=sp_icon, font=(self.family_sans, 17), fill=THEME["fg"]
+        )
+
+        tk.Label(
+            inner, text="Session Complete!",
+            font=(self.family_serif, 17, "bold"),
+            fg=THEME["fg"], bg=THEME["bg_card"]
+        ).pack(pady=(0, 12))
+
+        # 2. Summary details in Plus Jakarta Sans
+        tk.Label(
+            inner, text=mins_text,
+            font=(self.family_sans_semi, 11, "bold"),
+            fg=THEME["fg"], bg=THEME["bg_card"],
+            wraplength=card_w - 56, justify="center"
+        ).pack(pady=(0, 8))
+
+        pill_fg = THEME["accent"] if self.current_theme in ("night", "chill") else THEME["green_dark"]
+        species_pill = tk.Label(
+            inner, text=species_stage_text,
+            font=(self.family_sans_semi, 10, "bold"),
+            fg=pill_fg, bg=THEME["bg_dark"],
+            padx=12, pady=6,
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        species_pill.pack(pady=(0, 8))
+
+        tk.Label(
+            inner, text=f"🎯 {clean_task}",
+            font=self.font_small,
+            fg=THEME["fg_muted"], bg=THEME["bg_card"],
+            wraplength=card_w - 56, justify="center"
+        ).pack(pady=(0, 4))
+
+        if newly_unlocked:
+            ach_names = ", ".join(f"{a['icon']} {a['name']}" for a in newly_unlocked)
+            tk.Label(
+                inner, text=f"🏆 Unlocked: {ach_names}",
+                font=self.font_xs_bold,
+                fg=THEME.get("yellow_soft", THEME["accent"]), bg=THEME["bg_card"],
+                wraplength=card_w - 56, justify="center"
+            ).pack(pady=(6, 0))
+
+        # 3. Action Buttons
+        btn_row = tk.Frame(inner, bg=THEME["bg_card"])
+        btn_row.pack(pady=(18, 0))
+
+        if active_task and not active_task.get("completed"):
+            def _mark_complete():
+                db.set_task_completed(active_task["id"], True)
+                db.record_daily_challenge_task_completed(1)
+                if self.active_task_id == active_task["id"]:
+                    self.active_task_id = None
+                    db.set_setting("active_task_id", "")
+                self._dismiss_session_complete_modal()
+                if self.current_view == "timer":
+                    self._show_timer_view()
+                elif self.current_view == "forest":
+                    self._show_forest_view()
+
+            mark_btn = tk.Label(
+                btn_row, text="Mark Task Complete",
+                font=self.font_small_bold,
+                bg=THEME["bg_dark"], fg=THEME["fg"],
+                padx=14, pady=8, cursor="hand2",
+                highlightbackground=THEME["border"], highlightthickness=1
+            )
+            mark_btn.pack(side="left", padx=(0, 10))
+            mark_btn.bind("<Button-1>", lambda e: _mark_complete())
+            mark_btn.bind("<Enter>", lambda e: mark_btn.configure(bg=THEME["border"]))
+            mark_btn.bind("<Leave>", lambda e: mark_btn.configure(bg=THEME["bg_dark"]))
+            self._session_modal_mark_complete_btn = mark_btn
+
+        cont_btn = tk.Label(
+            btn_row, text="Continue",
+            font=self.font_small_bold,
+            bg=THEME["accent"], fg=THEME.get("accent_fg", "#FFFFFF"),
+            padx=20, pady=8, cursor="hand2"
+        )
+        cont_btn.pack(side="left")
+        cont_btn.bind("<Button-1>", lambda e: self._dismiss_session_complete_modal())
+        cont_btn.bind("<Enter>", lambda e: cont_btn.configure(bg=THEME.get("accent_hover", THEME["accent"])))
+        cont_btn.bind("<Leave>", lambda e: cont_btn.configure(bg=THEME["accent"]))
+        self._session_modal_continue_btn = cont_btn
+
+        # Measure content and size rounded card (padding 24px all around)
+        inner.update_idletasks()
+        card_h = inner.winfo_reqheight() + 48
+
+        if use_trans:
+            card_cv = tk.Canvas(
+                card, width=card_w, height=card_h,
+                bg=trans_key, highlightthickness=0
+            )
+            card_cv.pack(fill="both", expand=True)
+            card_cv.create_polygon(
+                _rounded_rect_pts(1, 1, card_w - 2, card_h - 2, 16),
+                smooth=True, fill=THEME["bg_card"], outline=THEME["border"], width=1
+            )
+            card_cv.create_window(
+                card_w // 2, card_h // 2,
+                window=inner, width=card_w - 48
+            )
+        else:
+            card.configure(highlightbackground=THEME["border"], highlightthickness=1)
+            inner.pack(fill="both", expand=True, padx=24, pady=24)
+
+        target_x = rx + (rw - card_w) // 2
+        target_y = ry + (rh - card_h) // 2
+        card.geometry(f"{card_w}x{card_h}+{target_x}+{target_y + 10}")
+
+        # Keyboard shortcuts: Enter or Escape dismisses modal
+        for seq in ("<Return>", "<Escape>"):
+            card.bind(seq, lambda e: self._dismiss_session_complete_modal())
+            fid = self.root.bind(seq, lambda e: self._dismiss_session_complete_modal(), add="+")
+            if fid:
+                self._session_modal_root_binds.append((seq, fid))
+
+        try:
+            card.lift()
+            card.focus_set()
+            card.focus_force()
+        except tk.TclError:
+            pass
+
+        # Smooth ~0.25s fade & gentle rise-in transition (8 steps x 30ms = 240ms)
+        total_steps = 8
+
+        def _animate(step=1):
+            if self._session_modal_card is not card or self._session_modal_backdrop is not backdrop:
+                return
+            t = step / total_steps
+            ease = 1.0 - (1.0 - t) ** 2
+            y_off = int(round(10 * (1.0 - ease)))
+            try:
+                backdrop.attributes("-alpha", 0.45 * ease)
+                card.attributes("-alpha", 1.0 * ease)
+                card.geometry(f"{card_w}x{card_h}+{target_x}+{target_y + y_off}")
+            except tk.TclError:
+                return
+            if step < total_steps:
+                self._session_modal_anim_after = self.root.after(30, lambda: _animate(step + 1))
+            else:
+                self._session_modal_anim_after = None
+
+        _animate(1)
 
     def _stop_session(self):
         """Stop and save the session."""
@@ -2182,45 +2692,39 @@ class GrowYourForestApp:
             task_name=self.current_task
         )
 
-        # Check achievements
+        # Check achievements & daily challenges
         newly_unlocked = db.check_and_unlock_achievements()
+        db.record_daily_challenge_session(
+            minutes=int(self.focused_seconds // 60),
+            completed=completed,
+            paused=self.session_had_pause,
+            abandoned=(not completed),
+            task_name=self.current_task,
+            theme_mode=self.current_theme,
+            rain_enabled=bool(audio_player.player.is_playing),
+            planted_tree=(session_id is not None),
+        )
 
         self.session_active = False
         self.timer_running = False
         self.timer_paused = False
+        self.session_had_pause = False
+        self.active_quest = None
         self.last_tick_time = None
 
-        # Show completion message
+        # Show custom themed completion modal
         if session_id:
             stage = db.get_tree_stage(self.focused_seconds)
             mins = int(self.focused_seconds // 60)
-            stage_name = STAGE_LABELS.get(stage, "Seed")
-            curr_meta = SPECIES_METADATA.get(self.selected_species, {})
-            spec_display = f"{curr_meta.get('icon', '')} {curr_meta.get('name', 'Tree')}"
-
-            msg = f"Great job! You studied for {mins} minutes.\nYour {spec_display} reached: {stage_name}\n🎯 Focus: {self.current_task}"
-            if newly_unlocked:
-                ach_names = ", ".join(a["icon"] + " " + a["name"] for a in newly_unlocked)
-                msg += f"\n\n🏆 New achievements: {ach_names}"
-
             active_t = db.get_task_by_id(self.active_task_id) if self.active_task_id is not None else None
-            if active_t and not active_t["completed"]:
-                def _prompt_complete(t_obj=active_t, m=msg):
-                    if messagebox.askyesno(
-                        "Session Complete! 🌱",
-                        f"{m}\n\n✅ Mark task \"{t_obj['title']}\" complete?"
-                    ):
-                        db.set_task_completed(t_obj["id"], True)
-                        if self.active_task_id == t_obj["id"]:
-                            self.active_task_id = None
-                            db.set_setting("active_task_id", "")
-                        if self.current_view == "timer":
-                            self._show_timer_view()
-                        elif self.current_view == "forest":
-                            self._show_forest_view()
-                self.root.after(100, _prompt_complete)
-            else:
-                self.root.after(100, lambda m=msg: messagebox.showinfo("Session Complete! 🌱", m))
+            modal_task = self.current_task
+            modal_species = self.selected_species
+            self.root.after(
+                80,
+                lambda m=mins, sp=modal_species, st=stage, tk_name=modal_task, ach=newly_unlocked, at=active_t: (
+                    self._show_session_complete_modal(m, sp, st, tk_name, ach, at)
+                )
+            )
 
         self.focused_seconds = 0.0
         self._refresh_streak()
@@ -2231,9 +2735,21 @@ class GrowYourForestApp:
         if not self.session_active:
             return
         if messagebox.askyesno("Reset Session", "Are you sure? No progress will be saved."):
+            db.record_daily_challenge_session(
+                minutes=0,
+                completed=False,
+                paused=self.session_had_pause,
+                abandoned=True,
+                task_name=self.current_task,
+                theme_mode=self.current_theme,
+                rain_enabled=bool(audio_player.player.is_playing),
+                planted_tree=False,
+            )
             self.session_active = False
             self.timer_running = False
             self.timer_paused = False
+            self.session_had_pause = False
+            self.active_quest = None
             self.focused_seconds = 0.0
             self.last_tick_time = None
             self._show_timer_view()
@@ -2297,7 +2813,13 @@ class GrowYourForestApp:
         """Update timer display without rebuilding the view."""
         try:
             remaining = max(0, self.planned_duration - self.focused_seconds)
-            self.timer_display.configure(text=self._format_time(int(remaining)))
+            timer_str = self._format_time(int(remaining))
+            t_font = self._get_timer_font(timer_str)
+            if t_font[1] != self._last_timer_font_pt:
+                self._last_timer_font_pt = t_font[1]
+                self.timer_display.configure(text=timer_str, font=t_font)
+            else:
+                self.timer_display.configure(text=timer_str)
             self.elapsed_label.configure(
                 text=f"Focused: {self._format_time(int(self.focused_seconds))}"
             )
@@ -3827,49 +4349,277 @@ class GrowYourForestApp:
             "sakura_season": (1 if "cherry_blossom" in mature_species else 0, 1, ""),
             "evergreen": (1 if "pine" in mature_species else 0, 1, ""),
             "ancient_guardian": (1 if "angel_oak" in mature_species else 0, 1, ""),
-            "botanist": (min(len(species_used), 4), 4, ""),
+            "botanist": (min(len(species_used), 7), 7, ""),
         }
 
+    def _get_midnight_countdown_text(self):
+        """Return 'Time Left: Xh Ym' until local midnight."""
+        now = datetime.now()
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        rem_secs = max(0, int((tomorrow - now).total_seconds()))
+        hrs = rem_secs // 3600
+        mins = (rem_secs % 3600) // 60
+        return f"Time Left: {hrs}h {mins:02d}m"
+
+    def _tick_daily_countdown(self, active_date_str):
+        """Live tick countdown to midnight while on Achievements view; auto-rotates at midnight."""
+        if self.current_view != "achievements":
+            self._daily_countdown_after = None
+            return
+        if date.today().isoformat() != active_date_str:
+            self._show_achievements_view()
+            return
+        try:
+            if self.daily_countdown_label is not None and self.daily_countdown_label.winfo_exists():
+                self.daily_countdown_label.configure(text=self._get_midnight_countdown_text())
+        except tk.TclError:
+            self._daily_countdown_after = None
+            return
+        self._daily_countdown_after = self.root.after(15000, lambda d=active_date_str: self._tick_daily_countdown(d))
+
+    def _claim_daily_challenge(self, challenge_id):
+        """Claim a completed daily challenge reward and grant its tree seed."""
+        ok, inv, sp_id, _ = db.claim_daily_challenge_reward(challenge_id)
+        if ok:
+            if sp_id in SPECIES_METADATA:
+                self.selected_species = sp_id
+                db.set_setting("selected_species", sp_id)
+            if self.current_view == "achievements":
+                self._show_achievements_view()
+        return ok
+
+    def _reroll_daily_challenge(self, challenge_id):
+        """Swap one unclaimed daily challenge for another random quest (1/day)."""
+        ok, _ = db.reroll_daily_challenge(challenge_id)
+        if ok and self.current_view == "achievements":
+            self._show_achievements_view()
+        return ok
+
+    def _dismiss_active_quest(self):
+        """Dismiss the active Daily Quest banner on the Study tab."""
+        self.active_quest = None
+        if self.current_view == "timer":
+            self._show_timer_view()
+
+    def _launch_daily_challenge(self, ch):
+        """Pre-configure the Study tab from a Daily Challenge preset and switch to it."""
+        if not ch or ch.get("completed") or ch.get("claimed"):
+            return
+        if self.session_active:
+            self._show_timer_view()
+            return
+
+        preset = db.get_challenge_preset(ch)
+        dur_mins = preset["duration_minutes"]
+        self.planned_duration = dur_mins * 60
+        self.focused_seconds = 0.0
+
+        tag = preset.get("tag")
+        preset_task = preset.get("task")
+        cur = (self.current_task or "").strip()
+        if tag:
+            if not db._task_matches_tag(cur, tag.lower()):
+                self.current_task = f"{tag}:"
+        elif preset_task:
+            if not cur or cur == "General Study" or cur in {c["title"] for c in db.DAILY_CHALLENGE_POOL}:
+                self.current_task = preset_task
+
+        target_sp = preset.get("species")
+        if target_sp in SPECIES_METADATA and db.is_species_unlocked(target_sp):
+            self.selected_species = target_sp
+            db.set_setting("selected_species", target_sp)
+
+        if preset.get("rain") and not audio_player.player.is_playing:
+            self._toggle_rain_sound()
+
+        self.active_quest = {
+            "id": ch["id"],
+            "title": ch["title"],
+            "icon": ch["icon"],
+            "duration": dur_mins,
+        }
+
+        target_theme = preset.get("theme")
+        if target_theme in THEMES and target_theme != self.current_theme:
+            self._set_theme(target_theme)
+        self._show_timer_view()
+
+    def _set_ach_filter(self, filter_mode):
+        """Switch milestone filter between 'all', 'unlocked', and 'in_progress'."""
+        if filter_mode in ("all", "unlocked", "in_progress"):
+            self.ach_filter = filter_mode
+            if self.current_view == "achievements":
+                self._show_achievements_view()
+
+    def _tick_claim_pulse(self):
+        """Animate ready Claim Reward buttons with a subtle golden/emerald glow pulse."""
+        if self.current_view != "achievements" or not self._claim_pulse_buttons:
+            self._claim_pulse_after = None
+            return
+        self._claim_pulse_phase = (self._claim_pulse_phase + 1) % 2
+        is_dark = self.current_theme in ("night", "chill")
+        if self._claim_pulse_phase == 0:
+            bg_c = "#2E7D32" if not is_dark else "#3B7A57"
+            bd_c = "#E5B454"
+        else:
+            bg_c = "#3D8F41" if not is_dark else "#49946A"
+            bd_c = "#F7D99C"
+        alive = []
+        for btn in self._claim_pulse_buttons:
+            try:
+                if btn.winfo_exists():
+                    btn.configure(bg=bg_c, highlightbackground=bd_c)
+                    alive.append(btn)
+            except tk.TclError:
+                pass
+        self._claim_pulse_buttons = alive
+        if alive:
+            self._claim_pulse_after = self.root.after(480, self._tick_claim_pulse)
+        else:
+            self._claim_pulse_after = None
+
+    def _configure_darkwood_scrollbar(self):
+        """Style vertical scrollbar with dark espresso track (#231B16) and warm bronze thumb (#5C4938)."""
+        try:
+            style = ttk.Style(self.root)
+            if "clam" in style.theme_names():
+                style.theme_use("clam")
+            is_dark = self.current_theme in ("night", "chill")
+            trough = "#231B16" if is_dark else scenery.mix(THEME["bg_dark"], "#231B16", 0.35)
+            thumb = "#5C4938" if is_dark else scenery.mix(THEME["border"], "#5C4938", 0.55)
+            thumb_active = "#745C48" if is_dark else scenery.mix(THEME["accent"], "#5C4938", 0.45)
+            style.configure(
+                "DarkWood.Vertical.TScrollbar",
+                troughcolor=trough,
+                background=thumb,
+                bordercolor=trough,
+                darkcolor=thumb,
+                lightcolor=thumb,
+                arrowcolor="#B89B7E" if is_dark else THEME["fg_muted"],
+                gripcount=0,
+                width=10,
+                relief="flat",
+            )
+            style.map(
+                "DarkWood.Vertical.TScrollbar",
+                background=[("active", thumb_active), ("pressed", "#8A7058")],
+            )
+            return "DarkWood.Vertical.TScrollbar"
+        except tk.TclError:
+            return "Vertical.TScrollbar"
+
+    def _get_medallion_palette(self, ach_id, unlocked):
+        """Return themed botanical medallion colors (bg, glow, outline, icon) for an achievement."""
+        if not unlocked:
+            return {
+                "bg": THEME["bg_dark"],
+                "glow": None,
+                "outline": THEME["border"],
+                "icon": THEME["fg_light"],
+            }
+        palettes = {
+            "botanist": {
+                "bg": "#3B7A6B",
+                "glow": "#4C9482",
+                "outline": "#E6B85C",
+                "icon": "#E6B85C",
+            },
+            "evergreen": {
+                "bg": "#2E6F40",
+                "glow": "#3D8A53",
+                "outline": "#7BC98F",
+                "icon": "#7BC98F",
+            },
+            "growing_forest": {
+                "bg": "#2E6F40",
+                "glow": "#3D8A53",
+                "outline": "#7BC98F",
+                "icon": "#7BC98F",
+            },
+            "first_seed": {
+                "bg": "#4B8B3B",
+                "glow": "#60A34E",
+                "outline": "#A3D977",
+                "icon": "#A3D977",
+            },
+            "first_tree": {
+                "bg": "#4B8B3B",
+                "glow": "#60A34E",
+                "outline": "#A3D977",
+                "icon": "#A3D977",
+            },
+            "sakura_season": {
+                "bg": "#9E3B62",
+                "glow": "#B84E77",
+                "outline": "#FFB7D5",
+                "icon": "#FFB7D5",
+            },
+            "marathon": {
+                "bg": "#B86B28",
+                "glow": "#CF803B",
+                "outline": "#FFD180",
+                "icon": "#FFD180",
+            },
+        }
+        return palettes.get(
+            ach_id,
+            {
+                "bg": "#7D5A2A",
+                "glow": "#9C7338",
+                "outline": "#F5C26B",
+                "icon": "#F7D99C",
+            },
+        )
+
     def _render_achievement_card(self, card_canvas, w, h, ach, cur, target, suffix):
-        """Render a clean r=12 achievement card with 42x42 badge and borderless pill."""
+        """Render a clean r=12 milestone card with themed medallion, radial glow, and gold pill."""
         card_canvas.delete("all")
         if w < 40 or h < 40:
             return
         unlocked = bool(ach["unlocked"])
         is_dark = self.current_theme in ("night", "chill")
+        med = self._get_medallion_palette(ach.get("id", ""), unlocked)
 
         if unlocked:
-            card_bg = scenery.mix(THEME["bg_card"], "#F5C26B", 0.08 if is_dark else 0.14)
-            card_border = scenery.mix(THEME["bg_card"], "#F5C26B", 0.35)
-            icon_bg = (scenery.mix(card_bg, "#F5C26B", 0.15) if is_dark
-                       else scenery.mix("#2C2218", "#F5C26B", 0.22))
-            icon_fg = "#F7D99C"
+            card_bg = scenery.mix(THEME["bg_card"], "#F5C26B", 0.11 if is_dark else 0.16)
+            card_border = scenery.mix(THEME["bg_card"], "#F5C26B", 0.42)
             title_fg = THEME["fg"]
             desc_fg = THEME["fg_muted"]
+            shadow_col = scenery.mix(THEME["bg"], "#000000", 0.28 if is_dark else 0.12)
+            card_canvas.create_polygon(
+                _rounded_rect_pts(2, 3, w - 1, h - 1, 12),
+                fill=shadow_col, outline="", tags=("ach_card_shadow",),
+            )
         else:
             card_bg = scenery.mix(THEME["bg_card"], THEME["bg_dark"], 0.44)
             card_border = THEME["border"]
-            icon_bg = THEME["bg_dark"]
-            icon_fg = THEME["fg_light"]
             title_fg = THEME["fg_muted"]
             desc_fg = THEME["fg_light"]
 
-        # Single smooth 1px rounded card border (no duplicate offset shadow border)
+        # Single smooth 1px rounded card border
         card_canvas.create_polygon(
-            _rounded_rect_pts(1, 1, w - 2, h - 2, 12),
+            _rounded_rect_pts(1, 1, w - 2, h - 3 if unlocked else h - 2, 12),
             fill=card_bg, outline=card_border, width=1, tags=("ach_card_border",),
         )
+        if unlocked:
+            hi_col = scenery.mix(card_border, "#FFF4D6", 0.42 if is_dark else 0.65)
+            card_canvas.create_line(14, 2, max(16, w - 14), 2, fill=hi_col, width=1)
 
-        # Left 42x42 rounded square (r=10) badge + cream-gold icon when unlocked
+        # Left 42x42 circular medallion with inner radial glow when unlocked
         iy0 = max(16, (h - 42) // 2 - 2)
         iy1 = iy0 + 42
-        card_canvas.create_polygon(
-            _rounded_rect_pts(16, iy0, 58, iy1, 10),
-            fill=icon_bg, outline="", tags=("ach_icon_bg",),
+        card_canvas.create_oval(
+            16, iy0, 58, iy1,
+            fill=med["bg"], outline=med["outline"], width=1, tags=("ach_icon_bg",),
         )
+        if unlocked and med["glow"]:
+            card_canvas.create_oval(
+                21, iy0 + 5, 53, iy1 - 5,
+                fill=med["glow"], outline="", tags=("ach_icon_glow",),
+            )
         card_canvas.create_text(
             37, (iy0 + iy1) / 2, text=(ach["icon"] if unlocked else "🔒"),
-            font=self.font_emoji_large, fill=icon_fg, tags=("ach_icon_text",),
+            font=self.font_emoji_large, fill=med["icon"], tags=("ach_icon_text",),
         )
 
         # Top-right borderless gold-amber pill when unlocked, progress fraction when locked
@@ -3879,8 +4629,8 @@ class GrowYourForestApp:
             bx1 = w - 16
             bx0 = bx1 - pill_w
             by0, by1 = 15, 37
-            pill_bg = (scenery.mix(card_bg, "#F5C26B", 0.18) if is_dark
-                       else scenery.mix("#2C2218", "#F5C26B", 0.22))
+            pill_bg = (scenery.mix(card_bg, "#F5C26B", 0.20) if is_dark
+                       else scenery.mix("#2C2218", "#F5C26B", 0.24))
             card_canvas.create_polygon(
                 _rounded_rect_pts(bx0, by0, bx1, by1, 11),
                 fill=pill_bg, outline="", width=0, tags=("ach_unlocked_pill",),
@@ -3904,25 +4654,25 @@ class GrowYourForestApp:
             frac_txt = f"{cur}{suffix}/{target}{suffix}"
             card_canvas.create_text(
                 w - 16, 25, text=frac_txt, anchor="e",
-                font=(self.family_mono, 9, "bold"), fill=THEME["fg_muted"],
+                font=(self.family_mono, 9, "bold"), fill=THEME["fg"],
             )
-            # Subtle progress bar along the bottom of locked card
             bar_x0, bar_x1 = 72, max(92, w - 16)
             bar_y0, bar_y1 = h - 22, h - 15
+            track_col = "#1A1411" if is_dark else scenery.mix(THEME["bar_bg"], THEME["border"], 0.45)
+            fill_col = "#E5B454" if is_dark else THEME["accent"]
             card_canvas.create_polygon(
                 _rounded_rect_pts(bar_x0, bar_y0, bar_x1, bar_y1, 3),
-                fill=THEME["bar_bg"], outline="",
+                fill=track_col, outline=THEME["border"], width=1,
             )
             ratio = min(1.0, max(0.0, cur / float(max(1, target))))
             if ratio > 0:
                 fill_w = max(8.0, (bar_x1 - bar_x0) * ratio)
                 card_canvas.create_polygon(
                     _rounded_rect_pts(bar_x0, bar_y0, min(bar_x1, bar_x0 + fill_w), bar_y1, 3),
-                    fill=THEME["accent"], outline="",
+                    fill=fill_col, outline="",
                 )
             desc_right_pad = 90
 
-        # Achievement title and wrapped description
         text_x = 72
         text_w = max(120, w - text_x - desc_right_pad)
         card_canvas.create_text(
@@ -3940,15 +4690,22 @@ class GrowYourForestApp:
 
         achievements = db.get_achievements()
         unlocked_count = sum(1 for a in achievements if a["unlocked"])
+        locked_count = len(achievements) - unlocked_count
         progress_map = self._get_achievement_progress_map()
+        daily_state = db.get_daily_challenges_state()
+        rerolls_left = daily_state.get("rerolls_left", 0)
+        seed_inv = db.get_seed_inventory()
+        total_seeds = sum(seed_inv.values())
         is_dark = self.current_theme in ("night", "chill")
+        vw, _ = self._get_viewport_size()
+        use_two_cols = vw >= 860
 
-        # Header row stays fixed above scrollable cards grid
+        # ── Top Header Row ──
         hdr = tk.Frame(self.content_frame, bg=THEME["bg"])
         hdr.pack(fill="x", pady=(0, 12))
 
         tk.Label(
-            hdr, text="🏆 Achievements",
+            hdr, text="🏆 Achievements & Daily Hub",
             font=self.font_title, fg=THEME["green_dark"], bg=THEME["bg"]
         ).pack(side="left")
 
@@ -3960,16 +4717,336 @@ class GrowYourForestApp:
             bg=hdr_badge_bg, padx=12, pady=4, highlightthickness=0,
         ).pack(side="right", pady=4)
 
-        # Independently scrollable grid viewport so bottom navbar never gets pushed off-screen
-        scroll_host = tk.Frame(self.content_frame, bg=THEME["bg"])
+        self.seed_inventory_badge = tk.Label(
+            hdr, text=f"🌱 Seed Bag: {total_seeds}",
+            font=self.font_small_bold, fg=THEME["green_dark"],
+            bg=THEME["accent_light"], padx=10, pady=4,
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        self.seed_inventory_badge.pack(side="right", padx=(0, 8), pady=4)
+
+        # ── 2-Column Progression Hub (~40% Daily Challenges | ~60% Milestones) ──
+        hub_row = tk.Frame(self.content_frame, bg=THEME["bg"])
+        hub_row.pack(fill="both", expand=True)
+
+        if use_two_cols:
+            hub_row.columnconfigure(0, weight=4, uniform="hub_col")
+            hub_row.columnconfigure(1, weight=6, uniform="hub_col")
+            hub_row.rowconfigure(0, weight=1)
+            left_grid_kw = {"row": 0, "column": 0, "padx": (0, 12), "sticky": "nsew"}
+            right_grid_kw = {"row": 0, "column": 1, "sticky": "nsew"}
+        else:
+            hub_row.columnconfigure(0, weight=1)
+            hub_row.rowconfigure(1, weight=1)
+            left_grid_kw = {"row": 0, "column": 0, "pady": (0, 12), "sticky": "ew"}
+            right_grid_kw = {"row": 1, "column": 0, "sticky": "nsew"}
+
+        # ── LEFT COLUMN: Daily Challenges (~40% width) ──
+        daily_panel = tk.Frame(
+            hub_row, bg=THEME["bg_card"],
+            highlightbackground=THEME["border"], highlightthickness=1
+        )
+        daily_panel.grid(**left_grid_kw)
+
+        d_hdr = tk.Frame(daily_panel, bg=THEME["bg_card"])
+        d_hdr.pack(fill="x", padx=16, pady=(14, 10))
+
+        tk.Label(
+            d_hdr, text="🎯 Daily Challenges",
+            font=self.font_section, fg=THEME["fg"], bg=THEME["bg_card"]
+        ).pack(side="left", anchor="w")
+
+        self.daily_countdown_label = tk.Label(
+            d_hdr, text=self._get_midnight_countdown_text(),
+            font=(self.family_mono, 8, "bold"),
+            fg=THEME["fg_muted"], bg=THEME["bg_dark"],
+            padx=8, pady=3, highlightbackground=THEME["border"], highlightthickness=1
+        )
+        self.daily_countdown_label.pack(side="right", anchor="e")
+
+        self.daily_challenge_cards = []
+        self._claim_pulse_buttons = []
+        gold_accent = "#E5B454" if is_dark else "#D99B26"
+        claim_ready_bg = "#2E7D32" if not is_dark else "#3B7A57"
+        track_bg = "#1E1713" if is_dark else THEME["bar_bg"]
+        fill_amber = "#E5B454"
+        fill_emerald = "#4CAF50" if not is_dark else "#5CC970"
+
+        reward_styles = {
+            "pine": {
+                "border": "#3B7A57",
+                "bg": scenery.mix(THEME["bg_card"], "#3B7A57", 0.18 if is_dark else 0.12),
+                "fg": "#8FD9AD" if is_dark else "#1E5236",
+            },
+            "angel_oak": {
+                "border": "#D4A24C",
+                "bg": scenery.mix(THEME["bg_card"], "#E5B454", 0.18 if is_dark else 0.13),
+                "fg": "#F7D99C" if is_dark else "#7A5616",
+            },
+            "cherry_blossom": {
+                "border": "#D46A92",
+                "bg": scenery.mix(THEME["bg_card"], "#F48FB1", 0.18 if is_dark else 0.14),
+                "fg": "#FFB7D5" if is_dark else "#8C244E",
+            },
+            "oak": {
+                "border": "#5E9E55",
+                "bg": scenery.mix(THEME["bg_card"], "#688536", 0.18 if is_dark else 0.12),
+                "fg": "#B5E092" if is_dark else "#2D5222",
+            },
+            "willow": {
+                "border": "#5E9C71",
+                "bg": scenery.mix(THEME["bg_card"], "#3A6B4C", 0.22 if is_dark else 0.14),
+                "fg": "#8BC499" if is_dark else "#244A33",
+            },
+            "maple": {
+                "border": "#C93B3B",
+                "bg": scenery.mix(THEME["bg_card"], "#C93B3B", 0.18 if is_dark else 0.12),
+                "fg": "#F4A261" if is_dark else "#8E2430",
+            },
+            "moonlit_blossom": {
+                "border": "#6C63A6",
+                "bg": scenery.mix(THEME["bg_card"], "#3B3561", 0.24 if is_dark else 0.14),
+                "fg": "#7CE8FF" if is_dark else "#3B3561",
+            },
+        }
+
+        for ch in daily_state["challenges"]:
+            is_done = bool(ch["completed"])
+            is_claimed = bool(ch["claimed"])
+            is_launchable = (not is_done and not is_claimed)
+            c_bg = scenery.mix(THEME["bg_card"], "#F5C26B", 0.08 if is_dark else 0.10) if (is_done and not is_claimed) else THEME["bg_dark"]
+            c_border = gold_accent if (is_done and not is_claimed) else THEME["border"]
+
+            c_card = tk.Frame(
+                daily_panel, bg=c_bg,
+                highlightbackground=c_border, highlightthickness=1,
+                cursor="hand2" if is_launchable else ""
+            )
+            c_card.pack(fill="x", padx=14, pady=(0, 9))
+            self.daily_challenge_cards.append(c_card)
+
+            c_inner = tk.Frame(c_card, bg=c_bg, cursor="hand2" if is_launchable else "")
+            c_inner.pack(fill="x", padx=12, pady=9)
+
+            top_line = tk.Frame(c_inner, bg=c_bg, cursor="hand2" if is_launchable else "")
+            top_line.pack(fill="x")
+
+            title_lbl = tk.Label(
+                top_line, text=f"{ch['icon']} {ch['title']}",
+                font=self.font_small_bold, fg=THEME["fg"], bg=c_bg, anchor="w",
+                cursor="hand2" if is_launchable else ""
+            )
+            title_lbl.pack(side="left")
+
+            can_reroll = (rerolls_left > 0 and not is_claimed)
+            reroll_lbl = f"↻ Reroll ({rerolls_left} left)" if can_reroll else "↻ Reroll (0)"
+            reroll_btn = tk.Label(
+                top_line, text=reroll_lbl,
+                font=(self.family_sans, 7, "bold"),
+                fg=THEME["fg_muted"] if can_reroll else THEME["fg_light"],
+                bg=THEME["bg_card"], padx=6, pady=1,
+                cursor="hand2" if can_reroll else "",
+                highlightbackground=THEME["border"], highlightthickness=1
+            )
+            reroll_btn.pack(side="right", padx=(6, 0))
+            if can_reroll:
+                def _on_reroll_click(e, cid=ch["id"]):
+                    self._reroll_daily_challenge(cid)
+                    return "break"
+                reroll_btn.bind("<Button-1>", _on_reroll_click)
+                reroll_btn.bind("<Enter>", lambda e, b=reroll_btn: b.configure(fg=THEME["fg"]))
+                reroll_btn.bind("<Leave>", lambda e, b=reroll_btn: b.configure(fg=THEME["fg_muted"]))
+            c_card._reroll_btn = reroll_btn
+
+            unit = ch.get("unit", "")
+            prog_txt = f"{ch['progress']}{unit} / {ch['target']}{unit}"
+            prog_lbl = tk.Label(
+                top_line, text=prog_txt,
+                font=(self.family_mono, 8, "bold"),
+                fg=gold_accent if is_done else THEME["fg_muted"],
+                bg=c_bg, anchor="e", cursor="hand2" if is_launchable else ""
+            )
+            prog_lbl.pack(side="right")
+
+            desc_lbl = tk.Label(
+                c_inner, text=ch["description"],
+                font=self.font_xs, fg=THEME["fg_muted"], bg=c_bg,
+                anchor="w", justify="left", wraplength=270 if use_two_cols else 420,
+                cursor="hand2" if is_launchable else ""
+            )
+            desc_lbl.pack(fill="x", pady=(3, 6))
+
+            # Sleek 6px horizontal progress bar right above reward row
+            p_track = tk.Frame(
+                c_inner, bg=track_bg, height=6,
+                highlightbackground=THEME["border"], highlightthickness=1,
+                cursor="hand2" if is_launchable else ""
+            )
+            p_track.pack(fill="x", pady=(0, 8))
+            p_track.pack_propagate(False)
+            ratio = min(1.0, max(0.0, ch["progress"] / float(max(1, ch["target"]))))
+            p_fill = None
+            if ratio > 0:
+                bar_col = fill_emerald if is_done else fill_amber
+                p_fill = tk.Frame(p_track, bg=bar_col, height=6, cursor="hand2" if is_launchable else "")
+                p_fill.place(relx=0, rely=0, relwidth=max(0.03, ratio), relheight=1)
+
+            bot_line = tk.Frame(c_inner, bg=c_bg, cursor="hand2" if is_launchable else "")
+            bot_line.pack(fill="x")
+
+            r_style = reward_styles.get(ch.get("reward_species", "oak"), reward_styles["oak"])
+            reward_lbl = tk.Label(
+                bot_line, text=f"Reward: {ch['reward_label']}",
+                font=self.font_xs_bold, fg=r_style["fg"],
+                bg=r_style["bg"], padx=7, pady=3,
+                highlightbackground=r_style["border"], highlightthickness=1,
+                cursor="hand2" if is_launchable else ""
+            )
+            reward_lbl.pack(side="left", anchor="w")
+
+            start_quest_pill = None
+            if is_claimed:
+                claim_btn = tk.Label(
+                    bot_line, text="✓ Claimed",
+                    font=self.font_xs_bold,
+                    bg=THEME["bg_card"], fg=THEME["green_med"],
+                    padx=10, pady=4,
+                    highlightbackground=THEME["border"], highlightthickness=1
+                )
+            elif is_done:
+                claim_btn = tk.Label(
+                    bot_line, text="✦ Claim Reward",
+                    font=self.font_xs_bold,
+                    bg=claim_ready_bg, fg="#FFFFFF",
+                    padx=10, pady=4, cursor="hand2",
+                    highlightbackground=gold_accent, highlightthickness=2
+                )
+                def _on_claim_click(e, cid=ch["id"]):
+                    self._claim_daily_challenge(cid)
+                    return "break"
+                claim_btn.bind("<Button-1>", _on_claim_click)
+                self._claim_pulse_buttons.append(claim_btn)
+            else:
+                claim_btn = tk.Label(
+                    bot_line, text="▶ Start Quest",
+                    font=self.font_xs_bold,
+                    bg=scenery.mix(THEME["bg_card"], THEME["accent"], 0.16),
+                    fg=THEME["accent"] if is_dark else THEME["green_dark"],
+                    padx=9, pady=4, cursor="hand2",
+                    highlightbackground=THEME["accent"], highlightthickness=1
+                )
+                start_quest_pill = claim_btn
+
+            claim_btn.pack(side="right", anchor="e")
+            c_card._claim_btn = claim_btn
+            c_card._start_quest_pill = start_quest_pill
+
+            if is_launchable:
+                hover_border = gold_accent if is_dark else THEME["accent"]
+                clickable_parts = [
+                    c_card, c_inner, top_line, title_lbl, prog_lbl,
+                    desc_lbl, p_track, bot_line, reward_lbl, claim_btn
+                ]
+                if p_fill is not None:
+                    clickable_parts.append(p_fill)
+                for w in clickable_parts:
+                    w.bind("<Button-1>", lambda e, item=ch: self._launch_daily_challenge(item))
+                c_card.bind("<Enter>", lambda e, card=c_card, hc=hover_border: card.configure(highlightbackground=hc))
+                c_card.bind("<Leave>", lambda e, card=c_card, bc=c_border: card.configure(highlightbackground=bc))
+
+        if self._claim_pulse_buttons:
+            self._claim_pulse_phase = 0
+            self._claim_pulse_after = self.root.after(480, self._tick_claim_pulse)
+
+        # Compact 7-pill seed inventory bar at bottom of Daily Challenges panel
+        inv_bar = tk.Frame(daily_panel, bg=THEME["bg_card"])
+        inv_bar.pack(fill="x", padx=14, pady=(2, 12))
+        self.seed_inventory_pills = {}
+        seed_specs = [
+            ("cherry_blossom", "🌸", "Cherry Blossom Seeds"),
+            ("pine", "🌲", "Pine Seeds"),
+            ("angel_oak", "🌿", "Angel Oak Seeds"),
+            ("oak", "🌳", "Classic Oak Seeds"),
+            ("willow", "🪴", "Weeping Willow Seeds"),
+            ("maple", "🍁", "Japanese Maple Seeds"),
+            ("moonlit_blossom", "💠", "Moonlit Blossom Seeds"),
+        ]
+        for c_i in range(4):
+            inv_bar.columnconfigure(c_i, weight=1, uniform="seed_pill_col")
+        for idx, (sp_key, sp_ico, sp_title) in enumerate(seed_specs):
+            r_i, c_i = idx // 4, idx % 4
+            rs = reward_styles[sp_key]
+            cnt = seed_inv.get(sp_key, 0)
+            pill = tk.Label(
+                inv_bar, text=f"{sp_ico} {cnt}",
+                font=(self.family_mono, 8, "bold"),
+                fg=rs["fg"], bg=rs["bg"],
+                padx=6, pady=4,
+                highlightbackground=rs["border"], highlightthickness=1
+            )
+            pill.grid(row=r_i, column=c_i, padx=(0 if c_i == 0 else 4, 0), pady=(0 if r_i == 0 else 4, 0), sticky="ew")
+            tip_str = f"{sp_title}: {cnt}"
+            pill.bind("<Enter>", lambda e, p=pill, t=tip_str: self._show_stats_tooltip(p, t, e.x_root, e.y_root))
+            pill.bind("<Leave>", lambda e: self._hide_stats_tooltip())
+            self.seed_inventory_pills[sp_key] = pill
+
+        self._daily_countdown_after = self.root.after(
+            15000, lambda d=daily_state["date"]: self._tick_daily_countdown(d)
+        )
+
+        # ── RIGHT COLUMN: Glorified Milestones (~60% width, filter bar + dark-wood scrollbar) ──
+        right_panel = tk.Frame(hub_row, bg=THEME["bg"])
+        right_panel.grid(**right_grid_kw)
+
+        filter_bar = tk.Frame(right_panel, bg=THEME["bg"])
+        filter_bar.pack(fill="x", pady=(0, 8))
+
+        tk.Label(
+            filter_bar, text="🌿 Milestones",
+            font=self.font_section, fg=THEME["fg"], bg=THEME["bg"]
+        ).pack(side="left", anchor="center")
+
+        self.ach_filter_buttons = {}
+        filter_pills_wrap = tk.Frame(filter_bar, bg=THEME["bg"])
+        filter_pills_wrap.pack(side="right", anchor="e")
+
+        filter_defs = [
+            ("all", f"All ({len(achievements)})"),
+            ("unlocked", f"Unlocked ({unlocked_count})"),
+            ("in_progress", f"In Progress ({locked_count})"),
+        ]
+        for f_id, f_txt in filter_defs:
+            is_act = (self.ach_filter == f_id)
+            f_btn = tk.Label(
+                filter_pills_wrap, text=f_txt,
+                font=self.font_xs_bold,
+                bg=THEME["accent"] if is_act else THEME["bg_card"],
+                fg=THEME.get("accent_fg", "#FFFFFF") if is_act else THEME["fg_muted"],
+                padx=9, pady=4, cursor="hand2",
+                highlightbackground=THEME["accent"] if is_act else THEME["border"],
+                highlightthickness=1
+            )
+            f_btn.pack(side="left", padx=(6, 0))
+            f_btn.bind("<Button-1>", lambda e, fid=f_id: self._set_ach_filter(fid))
+            self.ach_filter_buttons[f_id] = f_btn
+
+        if self.ach_filter == "unlocked":
+            filtered_achievements = [a for a in achievements if a["unlocked"]]
+        elif self.ach_filter == "in_progress":
+            filtered_achievements = [a for a in achievements if not a["unlocked"]]
+        else:
+            filtered_achievements = list(achievements)
+
+        scroll_host = tk.Frame(right_panel, bg=THEME["bg"])
         scroll_host.pack(fill="both", expand=True)
 
+        sb_style = self._configure_darkwood_scrollbar()
         canvas = tk.Canvas(scroll_host, bg=THEME["bg"], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
+        scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview, style=sb_style)
         scroll_frame = tk.Frame(canvas, bg=THEME["bg"])
 
-        init_w = max(400, self.content_frame.winfo_width() - 24)
-        win_id = canvas.create_window((0, 0), window=scroll_frame, anchor="nw", width=init_w)
+        cw_est = max(420, int((vw - 72) * (0.58 if use_two_cols else 0.94)))
+        win_id = canvas.create_window((0, 0), window=scroll_frame, anchor="nw", width=cw_est)
         canvas.configure(yscrollcommand=scrollbar.set)
 
         scroll_frame.bind(
@@ -3978,7 +5055,7 @@ class GrowYourForestApp:
         )
         canvas.bind(
             "<Configure>",
-            lambda e: canvas.itemconfigure(win_id, width=max(320, e.width))
+            lambda e: canvas.itemconfigure(win_id, width=max(300, e.width))
         )
 
         canvas.pack(side="left", fill="both", expand=True)
@@ -3998,24 +5075,57 @@ class GrowYourForestApp:
         grid_frame.columnconfigure(0, weight=1, uniform="ach_col")
         grid_frame.columnconfigure(1, weight=1, uniform="ach_col")
 
-        init_card_w = max(240, (init_w - 32) // 2)
-        for i, ach in enumerate(achievements):
-            cur, target, suffix = progress_map.get(ach["id"], (0, 1, ""))
-            card_cv = tk.Canvas(
-                grid_frame, height=102, bg=THEME["bg"], highlightthickness=0
-            )
-            card_cv.grid(row=i // 2, column=i % 2, padx=8, pady=7, sticky="nsew")
-            self._render_achievement_card(card_cv, init_card_w, 102, ach, cur, target, suffix)
-            card_cv.bind(
-                "<Configure>",
-                lambda e, cv=card_cv, a=ach, c=cur, t=target, s=suffix:
-                    self._render_achievement_card(cv, e.width, e.height, a, c, t, s)
-            )
+        if not filtered_achievements:
+            tk.Label(
+                grid_frame, text="No milestones in this filter yet 🌱",
+                font=self.font_body, fg=THEME["fg_muted"], bg=THEME["bg"], pady=24
+            ).grid(row=0, column=0, columnspan=2)
+        else:
+            init_card_w = max(220, (cw_est - 28) // 2)
+            for i, ach in enumerate(filtered_achievements):
+                cur, target, suffix = progress_map.get(ach["id"], (0, 1, ""))
+                card_cv = tk.Canvas(
+                    grid_frame, height=102, bg=THEME["bg"], highlightthickness=0
+                )
+                card_cv.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="nsew")
+                self._render_achievement_card(card_cv, init_card_w, 102, ach, cur, target, suffix)
+                card_cv.bind(
+                    "<Configure>",
+                    lambda e, cv=card_cv, a=ach, c=cur, t=target, s=suffix:
+                        self._render_achievement_card(cv, e.width, e.height, a, c, t, s)
+                )
 
         # Bottom breathing room matching padding-bottom: 24px
         tk.Frame(scroll_frame, bg=THEME["bg"], height=24).pack(fill="x")
 
     # ──────────────── Helpers ────────────────
+
+    def _get_timer_font(self, text_str):
+        """Return a tabular monospace font tuple scaled to fit within sidebar bounds."""
+        char_len = len(text_str)
+        base_pt = self._timer_base_pt
+        avail_w = self._timer_avail_w
+        key = (char_len, base_pt, avail_w)
+        cached = self._timer_font_cache.get(key)
+        if cached is not None:
+            return cached
+
+        pt = base_pt
+        if char_len >= 8:
+            pt = max(18, int(round(base_pt * 0.66)))
+        elif char_len == 7:
+            pt = max(20, int(round(base_pt * 0.74)))
+
+        probe_str = "8" * char_len
+        while pt > 16:
+            f = tkfont.Font(root=self.root, family=self.family_mono, size=pt, weight="bold")
+            if f.measure(probe_str) <= avail_w:
+                break
+            pt -= 1
+
+        spec = (self.family_mono, pt, "bold")
+        self._timer_font_cache[key] = spec
+        return spec
 
     def _format_time(self, seconds):
         """Format seconds as MM:SS or HH:MM:SS."""

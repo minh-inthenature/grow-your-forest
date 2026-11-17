@@ -382,17 +382,26 @@ class RainSoundPlayer:
             return True
 
         target_path = self._target_path()
-        wav_path = os.path.join(BASE_DIR, "rain_master.wav")
+        wav_path = FALLBACK_WAV if os.path.exists(FALLBACK_WAV) else os.path.join(AUDIO_DIR, "rain_master.wav")
         play_path = wav_path if (backend in ("paplay", "pw-play", "aplay") and os.path.exists(wav_path)) else target_path
+        if not play_path or not os.path.exists(play_path):
+            self.is_playing = False
+            return False
 
         def _linux_loop():
             while self._linux_active:
+                vol = max(0, min(100, int(self.volume)))
                 if backend == "mpv":
-                    cmd = ["mpv", "--no-video", "--loop=inf", f"--volume={self.volume}", play_path]
+                    cmd = ["mpv", "--no-video", "--loop=inf", f"--volume={vol}", play_path]
                 elif backend == "ffplay":
-                    cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-loop", "0", play_path]
-                elif backend in ("paplay", "pw-play", "aplay"):
-                    cmd = [backend, play_path]
+                    cmd = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", str(vol), "-loop", "0", play_path]
+                elif backend == "paplay":
+                    pa_vol = int(round(65536 * (vol / 100.0)))
+                    cmd = ["paplay", f"--volume={pa_vol}", play_path]
+                elif backend == "pw-play":
+                    cmd = ["pw-play", f"--volume={vol / 100.0:.2f}", play_path]
+                elif backend == "aplay":
+                    cmd = ["aplay", play_path]
                 else:
                     break
                 try:
@@ -474,6 +483,10 @@ class RainSoundPlayer:
         """Set volume (0 to 100) and update playback seamlessly."""
         self.volume = max(0, min(100, int(volume)))
         with self._lock:
+            if sys.platform.startswith("linux"):
+                if self._linux_active:
+                    self._play_linux()
+                return
             if self._worker is not None and self._worker.is_alive():
                 self._mci_request("VOLUME", self.volume)
             if self._proc and self._proc.poll() is None:

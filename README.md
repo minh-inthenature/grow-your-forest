@@ -4,7 +4,8 @@ A cozy desktop focus timer built with Python & Tkinter. Complete study/focus ses
 
 ## Features
 
-- **Focus Timer & Study Growth**: Watch your active tree evolve across 6 stages — *Seed → Sprout → Small Sapling → Young Tree → Mature Tree → Flourishing* — as you study.
+- **Focus Timer & 7 Tree Species**: Watch your active tree evolve across 6 stages (*Seed → Sprout → Small Sapling → Young Tree → Mature Tree → Flourishing*) across 7 procedural species: **Cherry Blossom**, **Pine**, **Angel Oak**, **Classic Oak**, plus unlockable **Weeping Willow**, **Japanese Maple**, and **Moonlit Blossom** via the compact Tree Selector dropdown.
+- **Daily Challenges & Achievements Hub**: 2-column progression hub with 16 rotating Daily Challenges, 1/day reroll, Seed Bag rewards, 1-click quest launching, and redesigned Milestones.
 - **Task List with Tree Assignment**: Add tasks with an assigned tree species (Cherry Blossom, Pine, Angel Oak, Classic Oak), click any task to focus and auto-sync its tree species, tick off completed tasks, or reassign species anytime.
 - **Living 2D Sanctuary**: Multi-layer distant mountains, rolling hills, winding river, stepping stones, flowers, grass, clouds, and subtle wildlife/particles — with responsive laptop viewport scaling (`800x650` to `1200px+`).
 - **Four Smoothly Transitioning Themes**: Smooth color easing across **Morning**, **Afternoon**, **Night**, and **Chill** modes.
@@ -21,11 +22,11 @@ A cozy desktop focus timer built with Python & Tkinter. Complete study/focus ses
 2. Double-click **`GrowYourForest.exe`** directly — no Python installation required! Your progress is saved in `forest_data.db` right next to the executable.
 
 ### Option 2: Ubuntu / Debian (.deb Package)
-1. Download **`grow-your-forest_1.0.3_all.deb`** from [**Releases**](../../releases).
+1. Download **`grow-your-forest_2.0.0_all.deb`** from [**Releases**](../../releases).
 2. Install via terminal:
    ```bash
    sudo apt update
-   sudo apt install ./grow-your-forest_1.0.3_all.deb
+   sudo apt install ./grow-your-forest_2.0.0_all.deb
    ```
    *(or double-click the `.deb` file to open in Ubuntu Software / App Center)*.
 3. Launch **Grow Your Forest** directly from your application dock, or run `grow-your-forest` in terminal!

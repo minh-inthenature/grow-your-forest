@@ -7,6 +7,8 @@ import sqlite3
 import os
 import sys
 import json
+import random
+import re
 from datetime import datetime, date, timedelta
 
 
@@ -129,13 +131,17 @@ def init_db():
         ("sakura_season", "Sakura Season", "Grow a Cherry Blossom to Mature or Flourishing", "🌸"),
         ("evergreen", "Evergreen", "Grow a Pine to Mature or Flourishing", "🌲"),
         ("ancient_guardian", "Ancient Guardian", "Grow an Angel Oak to Mature or Flourishing", "🌿"),
-        ("botanist", "Master Botanist", "Plant all 4 distinct tree species", "🎨"),
+        ("botanist", "Master Botanist", "Plant all 7 distinct tree species", "🎨"),
     ]
     for aid, name, desc, icon in achievements:
         cursor.execute(
             "INSERT OR IGNORE INTO achievements (id, name, description, icon) VALUES (?, ?, ?, ?)",
             (aid, name, desc, icon)
         )
+    cursor.execute(
+        "UPDATE achievements SET description = ? WHERE id = 'botanist'",
+        ("Plant all 7 distinct tree species",),
+    )
 
     conn.commit()
     conn.close()
@@ -461,6 +467,9 @@ def get_species_breakdown():
         ("pine", "Pine", "#3B7A57"),
         ("angel_oak", "Angel Oak", "#8C6D46"),
         ("oak", "Classic Oak", "#688536"),
+        ("willow", "Weeping Willow", "#5E9C71"),
+        ("maple", "Japanese Maple", "#C93B3B"),
+        ("moonlit_blossom", "Moonlit Blossom", "#6C63A6"),
     ]
     conn = get_connection()
     cursor = conn.cursor()
@@ -619,7 +628,7 @@ def check_and_unlock_achievements():
         "sakura_season": mature_species.get("cherry_blossom", 0) >= 1,
         "evergreen": mature_species.get("pine", 0) >= 1,
         "ancient_guardian": mature_species.get("angel_oak", 0) >= 1,
-        "botanist": distinct_species_count >= 4,
+        "botanist": distinct_species_count >= 7,
     }
 
     now = datetime.now().isoformat()
@@ -771,6 +780,495 @@ def get_completed_tasks_count():
     count = cursor.fetchone()[0]
     conn.close()
     return count
+
+
+# ──────────────── Daily Challenges & Seed Inventory ────────────────
+
+DAILY_CHALLENGE_POOL = [
+    # Endurance & Focus Discipline (Strict Mode)
+    {
+        "id": "iron_focus",
+        "title": "Iron Focus",
+        "description": "Complete a single 60-minute session without pausing or abandoning",
+        "icon": "🛡️",
+        "target": 1,
+        "unit": "",
+        "reward_species": "cherry_blossom",
+        "reward_label": "🌸 Cherry Blossom Seed",
+        "preset": {"duration": 60, "task": "Iron Focus", "species": "cherry_blossom"},
+    },
+    {
+        "id": "deep_work_block",
+        "title": "Deep Work Block",
+        "description": "Complete a 90-minute uninterrupted session",
+        "icon": "🧠",
+        "target": 1,
+        "unit": "",
+        "reward_species": "moonlit_blossom",
+        "reward_label": "💠 Moonlit Blossom Seed",
+        "preset": {"duration": 90, "task": "Deep Work Block", "species": "moonlit_blossom"},
+    },
+    {
+        "id": "phone_free_marathon",
+        "title": "Phone-Free Marathon",
+        "description": "Accumulate 2 hours of strict focus sessions today",
+        "icon": "📵",
+        "target": 120,
+        "unit": "m",
+        "reward_species": "angel_oak",
+        "reward_label": "🌳 Angel Oak Seed",
+        "preset": {"duration": 60, "remaining_cap": 90, "task": "Phone-Free Marathon", "species": "angel_oak"},
+    },
+    {
+        "id": "zero_distractions",
+        "title": "Zero Distractions",
+        "description": "Finish 3 consecutive sessions without cancelling early",
+        "icon": "🎯",
+        "target": 3,
+        "unit": "",
+        "reward_species": "willow",
+        "reward_label": "🪴 Willow Seed",
+        "preset": {"duration": 25, "task": "Zero Distractions", "species": "willow"},
+    },
+    # Subject & Tag Challenges
+    {
+        "id": "code_cadet",
+        "title": "Code Cadet",
+        "description": "Log 60 minutes under the Code tag",
+        "icon": "💻",
+        "target": 60,
+        "unit": "m",
+        "reward_species": "pine",
+        "reward_label": "🌲 Pine Seed",
+        "tag": "code",
+        "preset": {"tag": "Code", "duration": 60, "remaining_cap": 60, "species": "pine"},
+    },
+    {
+        "id": "deep_debugger",
+        "title": "Deep Debugger",
+        "description": "Log 90 minutes under the Code tag",
+        "icon": "🐞",
+        "target": 90,
+        "unit": "m",
+        "reward_species": "cherry_blossom",
+        "reward_label": "🌸 Cherry Blossom Seed",
+        "tag": "code",
+        "preset": {"tag": "Code", "duration": 90, "remaining_cap": 90, "species": "cherry_blossom"},
+    },
+    {
+        "id": "scholars_grind",
+        "title": "Scholar's Grind",
+        "description": "Log 90 minutes under the Study tag",
+        "icon": "📚",
+        "target": 90,
+        "unit": "m",
+        "reward_species": "maple",
+        "reward_label": "🍁 Maple Seed",
+        "tag": "study",
+        "preset": {"tag": "Study", "duration": 90, "remaining_cap": 90, "species": "maple"},
+    },
+    {
+        "id": "lab_theory",
+        "title": "Lab & Theory",
+        "description": "Log 60 minutes under the Science tag",
+        "icon": "🔬",
+        "target": 60,
+        "unit": "m",
+        "reward_species": "cherry_blossom",
+        "reward_label": "🌸 Cherry Blossom Seed",
+        "tag": "science",
+        "preset": {"tag": "Science", "duration": 60, "remaining_cap": 60, "species": "cherry_blossom"},
+    },
+    {
+        "id": "wordsmith",
+        "title": "Wordsmith",
+        "description": "Log 45 minutes under the Write tag",
+        "icon": "✍️",
+        "target": 45,
+        "unit": "m",
+        "reward_species": "maple",
+        "reward_label": "🍁 Maple Seed",
+        "tag": "write",
+        "preset": {"tag": "Write", "duration": 45, "remaining_cap": 60, "species": "maple"},
+    },
+    {
+        "id": "creative_flow",
+        "title": "Creative Flow",
+        "description": "Log 45 minutes under the Art tag",
+        "icon": "🎨",
+        "target": 45,
+        "unit": "m",
+        "reward_species": "cherry_blossom",
+        "reward_label": "🌸 Cherry Blossom Seed",
+        "tag": "art",
+        "preset": {"tag": "Art", "duration": 45, "remaining_cap": 60, "species": "cherry_blossom"},
+    },
+    # Routine, Time-of-Day & Task Challenges
+    {
+        "id": "early_bird",
+        "title": "Early Bird",
+        "description": "Complete a 25+ minute session in Morning mode",
+        "icon": "🌅",
+        "target": 1,
+        "unit": "",
+        "reward_species": "oak",
+        "reward_label": "🌱 Classic Oak Seed",
+        "preset": {"theme": "morning", "duration": 25, "task": "Early Bird Focus", "species": "oak"},
+    },
+    {
+        "id": "night_owl",
+        "title": "Night Owl",
+        "description": "Complete a 45+ minute session in Night mode",
+        "icon": "🌙",
+        "target": 1,
+        "unit": "",
+        "reward_species": "moonlit_blossom",
+        "reward_label": "💠 Moonlit Blossom Seed",
+        "preset": {"theme": "night", "duration": 45, "task": "Night Owl Focus", "species": "moonlit_blossom"},
+    },
+    {
+        "id": "rainy_day_focus",
+        "title": "Rainy Day Focus",
+        "description": "Complete 60 minutes of study with Rain audio enabled",
+        "icon": "🌧️",
+        "target": 60,
+        "unit": "m",
+        "reward_species": "willow",
+        "reward_label": "🪴 Willow Seed",
+        "preset": {"rain": True, "duration": 60, "remaining_cap": 60, "task": "Rainy Day Focus", "species": "willow"},
+    },
+    {
+        "id": "task_crusher",
+        "title": "Task Crusher",
+        "description": "Check off 3 tasks from your Current Task list today",
+        "icon": "✅",
+        "target": 3,
+        "unit": "",
+        "reward_species": "oak",
+        "reward_label": "🌱 Classic Oak Seed",
+        "preset": {"duration": 25, "task": "Task Crusher", "species": "oak"},
+    },
+    {
+        "id": "triple_sprout",
+        "title": "Triple Sprout",
+        "description": "Plant 3 trees in a single day",
+        "icon": "🌱",
+        "target": 3,
+        "unit": "",
+        "reward_species": "pine",
+        "reward_label": "🌲 Pine Seed",
+        "preset": {"duration": 25, "task": "Triple Sprout", "species": "pine"},
+    },
+    {
+        "id": "daily_century",
+        "title": "Daily Century",
+        "description": "Accumulate 100 total minutes of focus today",
+        "icon": "💯",
+        "target": 100,
+        "unit": "m",
+        "reward_species": "angel_oak",
+        "reward_label": "🌳 Angel Oak Seed",
+        "preset": {"duration": 60, "remaining_cap": 90, "task": "Daily Century", "species": "angel_oak"},
+    },
+]
+
+_DAILY_CHALLENGE_MAP = {c["id"]: c for c in DAILY_CHALLENGE_POOL}
+
+
+def get_challenge_preset(challenge):
+    """Resolve the Study-tab session preset for a daily challenge dict or ID."""
+    if isinstance(challenge, str):
+        ch = _DAILY_CHALLENGE_MAP.get(challenge, {})
+        progress = 0
+    else:
+        ch = challenge or {}
+        progress = int(ch.get("progress", 0))
+    meta = _DAILY_CHALLENGE_MAP.get(ch.get("id"), ch)
+    preset = meta.get("preset", {})
+    unit = meta.get("unit", "")
+    target = int(meta.get("target", 25))
+    if unit == "m":
+        remaining = max(1, target - progress)
+        cap = int(preset.get("remaining_cap", 90))
+        duration_mins = min(cap, remaining)
+    else:
+        duration_mins = int(preset.get("duration", 25))
+    return {
+        "duration_minutes": max(1, duration_mins),
+        "tag": preset.get("tag"),
+        "task": preset.get("task"),
+        "theme": preset.get("theme"),
+        "rain": bool(preset.get("rain", False)),
+        "species": preset.get("species"),
+    }
+
+
+def get_seed_inventory():
+    """Return persisted tree seed inventory counts per species."""
+    default = {
+        "oak": 0,
+        "cherry_blossom": 0,
+        "pine": 0,
+        "angel_oak": 0,
+        "willow": 0,
+        "maple": 0,
+        "moonlit_blossom": 0,
+    }
+    raw = get_setting("seed_inventory", "")
+    if not raw:
+        return dict(default)
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            for k in default:
+                default[k] = max(0, int(parsed.get(k, 0)))
+    except Exception:
+        pass
+    return default
+
+
+def get_rainy_sessions_count():
+    """Return number of completed sessions finished with Rain audio enabled."""
+    try:
+        return max(0, int(get_setting("rainy_sessions_count", "0")))
+    except Exception:
+        return 0
+
+
+def get_species_unlock_status():
+    """Return {species_id: (unlocked: bool, requirement_text: str)} for all 7 species."""
+    inv = get_seed_inventory()
+    rain_cnt = get_rainy_sessions_count()
+    streak = get_streak()
+    ach_unlocked = {a["id"] for a in get_achievements() if a["unlocked"]}
+
+    return {
+        "cherry_blossom": (True, "Unlocked"),
+        "pine": (True, "Unlocked"),
+        "angel_oak": (True, "Unlocked"),
+        "oak": (True, "Unlocked"),
+        "willow": (
+            inv.get("willow", 0) > 0 or rain_cnt >= 3,
+            "Claim a Willow Seed from Daily Challenges or complete 3 rainy sessions",
+        ),
+        "maple": (
+            inv.get("maple", 0) > 0 or streak >= 5,
+            "Claim a Maple Seed from Daily Challenges or reach a 5-day streak",
+        ),
+        "moonlit_blossom": (
+            inv.get("moonlit_blossom", 0) > 0 or streak >= 7 or ("consistency" in ach_unlocked),
+            "Claim a Moonlit Seed from Daily Challenges or reach a 7-day streak",
+        ),
+    }
+
+
+def is_species_unlocked(species_id):
+    """Return True if the given tree species is unlocked for planting."""
+    status = get_species_unlock_status()
+    return bool(status.get(species_id, (False, ""))[0])
+
+
+def add_seed_to_inventory(species, count=1):
+    """Add rewarded tree seed(s) to persistent seed inventory and return updated dict."""
+    inv = get_seed_inventory()
+    if species not in inv:
+        inv[species] = 0
+    inv[species] = max(0, inv[species] + int(count))
+    set_setting("seed_inventory", json.dumps(inv))
+    return inv
+
+
+def select_daily_challenges_for_date(date_str):
+    """Deterministically select 3 distinct daily challenges for YYYY-MM-DD."""
+    rng = random.Random(str(date_str))
+    return rng.sample(DAILY_CHALLENGE_POOL, 3)
+
+
+def _load_or_init_daily_state(date_str=None):
+    today_str = date_str or date.today().isoformat()
+    raw = get_setting("daily_challenges_state", "")
+    state = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and parsed.get("date") == today_str and isinstance(parsed.get("challenges"), list):
+                if len(parsed["challenges"]) == 3 and all(
+                    isinstance(c, dict) and c.get("id") in _DAILY_CHALLENGE_MAP for c in parsed["challenges"]
+                ):
+                    state = parsed
+        except Exception:
+            state = None
+
+    if state is None:
+        chosen = select_daily_challenges_for_date(today_str)
+        state = {
+            "date": today_str,
+            "consecutive_completed": 0,
+            "rerolls_left": 1,
+            "challenges": [
+                {"id": c["id"], "progress": 0, "claimed": False}
+                for c in chosen
+            ],
+        }
+        set_setting("daily_challenges_state", json.dumps(state))
+    elif "rerolls_left" not in state:
+        state["rerolls_left"] = 1
+        set_setting("daily_challenges_state", json.dumps(state))
+    return state
+
+
+def get_daily_challenges_state(date_str=None):
+    """Return today's 3 active daily challenges enriched with metadata and progress."""
+    state = _load_or_init_daily_state(date_str)
+    enriched = []
+    for item in state["challenges"]:
+        meta = _DAILY_CHALLENGE_MAP[item["id"]]
+        target = int(meta["target"])
+        progress = min(target, max(0, int(item.get("progress", 0))))
+        enriched.append({
+            **meta,
+            "progress": progress,
+            "claimed": bool(item.get("claimed", False)),
+            "completed": progress >= target,
+        })
+    return {
+        "date": state["date"],
+        "consecutive_completed": int(state.get("consecutive_completed", 0)),
+        "rerolls_left": max(0, int(state.get("rerolls_left", 0))),
+        "challenges": enriched,
+    }
+
+
+def _task_matches_tag(task_name, tag):
+    """Case-insensitive check whether task_name carries the subject tag."""
+    txt = (task_name or "").strip().lower()
+    if not txt or not tag:
+        return False
+    if txt == tag or txt.startswith(f"{tag}:") or txt.startswith(f"{tag} "):
+        return True
+    words = re.findall(r"[a-z]+", txt)
+    return tag in words
+
+
+def record_daily_challenge_session(
+    minutes,
+    completed=True,
+    paused=False,
+    abandoned=False,
+    task_name="",
+    theme_mode="morning",
+    rain_enabled=False,
+    planted_tree=True,
+    date_str=None,
+):
+    """Update today's daily challenges automatically on session finish/reset."""
+    state = _load_or_init_daily_state(date_str)
+    mins = max(0, int(minutes or 0))
+    strict_ok = bool(completed and not paused and not abandoned)
+
+    if completed and not abandoned and rain_enabled:
+        set_setting("rainy_sessions_count", str(get_rainy_sessions_count() + 1))
+
+    if completed and not abandoned:
+        state["consecutive_completed"] = int(state.get("consecutive_completed", 0)) + 1
+    else:
+        state["consecutive_completed"] = 0
+    consec = state["consecutive_completed"]
+
+    for entry in state["challenges"]:
+        cid = entry["id"]
+        meta = _DAILY_CHALLENGE_MAP[cid]
+        target = int(meta["target"])
+        prog = int(entry.get("progress", 0))
+
+        if cid == "iron_focus":
+            if strict_ok and mins >= 60:
+                prog = 1
+        elif cid == "deep_work_block":
+            if strict_ok and mins >= 90:
+                prog = 1
+        elif cid == "phone_free_marathon":
+            if strict_ok and mins > 0:
+                prog += mins
+        elif cid == "zero_distractions":
+            prog = max(prog, min(target, consec))
+        elif "tag" in meta:
+            if mins > 0 and _task_matches_tag(task_name, meta["tag"]):
+                prog += mins
+        elif cid == "early_bird":
+            if completed and not abandoned and mins >= 25 and theme_mode == "morning":
+                prog = 1
+        elif cid == "night_owl":
+            if completed and not abandoned and mins >= 45 and theme_mode == "night":
+                prog = 1
+        elif cid == "rainy_day_focus":
+            if rain_enabled and mins > 0:
+                prog += mins
+        elif cid == "triple_sprout":
+            if planted_tree:
+                prog += 1
+        elif cid == "daily_century":
+            if mins > 0:
+                prog += mins
+
+        entry["progress"] = min(target, max(0, prog))
+
+    set_setting("daily_challenges_state", json.dumps(state))
+    return get_daily_challenges_state(state["date"])
+
+
+def record_daily_challenge_task_completed(delta=1, date_str=None):
+    """Increment task-completion daily challenges (Task Crusher) when a task is ticked."""
+    state = _load_or_init_daily_state(date_str)
+    for entry in state["challenges"]:
+        if entry["id"] == "task_crusher":
+            target = int(_DAILY_CHALLENGE_MAP["task_crusher"]["target"])
+            entry["progress"] = min(target, max(0, int(entry.get("progress", 0)) + int(delta)))
+    set_setting("daily_challenges_state", json.dumps(state))
+    return get_daily_challenges_state(state["date"])
+
+
+def claim_daily_challenge_reward(challenge_id, date_str=None):
+    """Claim reward for a completed daily challenge and grant its seed to inventory."""
+    state = _load_or_init_daily_state(date_str)
+    for entry in state["challenges"]:
+        if entry["id"] == challenge_id:
+            meta = _DAILY_CHALLENGE_MAP[challenge_id]
+            target = int(meta["target"])
+            if int(entry.get("progress", 0)) < target or entry.get("claimed"):
+                return (False, get_seed_inventory(), meta["reward_species"], meta["reward_label"])
+            entry["claimed"] = True
+            set_setting("daily_challenges_state", json.dumps(state))
+            inv = add_seed_to_inventory(meta["reward_species"], 1)
+            return (True, inv, meta["reward_species"], meta["reward_label"])
+    return (False, get_seed_inventory(), None, "")
+
+
+def reroll_daily_challenge(challenge_id, date_str=None):
+    """Swap out one unclaimed daily challenge once per day for another random quest."""
+    state = _load_or_init_daily_state(date_str)
+    rerolls_left = max(0, int(state.get("rerolls_left", 0)))
+    if rerolls_left <= 0:
+        return (False, get_daily_challenges_state(state["date"]))
+
+    current_ids = {c["id"] for c in state["challenges"]}
+    candidates = [c for c in DAILY_CHALLENGE_POOL if c["id"] not in current_ids]
+    if not candidates:
+        return (False, get_daily_challenges_state(state["date"]))
+
+    for idx, entry in enumerate(state["challenges"]):
+        if entry["id"] == challenge_id and not entry.get("claimed"):
+            replacement = random.choice(candidates)
+            state["challenges"][idx] = {
+                "id": replacement["id"],
+                "progress": 0,
+                "claimed": False,
+            }
+            state["rerolls_left"] = rerolls_left - 1
+            set_setting("daily_challenges_state", json.dumps(state))
+            return (True, get_daily_challenges_state(state["date"]))
+
+    return (False, get_daily_challenges_state(state["date"]))
 
 
 def export_backup_data():

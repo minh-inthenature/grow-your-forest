@@ -118,6 +118,9 @@ LEAF_BY_SPECIES = {
     "oak": "#B9C46A",
     "pine": "#9C7B58",
     "angel_oak": "#A9B99A",
+    "willow": "#8BC499",
+    "maple": "#E87A3E",
+    "moonlit_blossom": "#7CE8FF",
 }
 
 # ─────────────────────────────────────────────────────────────────────
@@ -351,12 +354,6 @@ def _draw_cloud(c, x, y, s, lit, shade, rim, tag):
         x + 0.54 * s, y - 0.20 * s,
     ]
     c.create_line(rim_pts, fill=rim, width=max(1, int(s * 0.045)), smooth=True, tags=(tag, "cloud"))
-
-    # Delicate trailing wisps near the flat base
-    c.create_line(x - 1.62 * s, base_y - 0.03 * s, x - 0.95 * s, base_y - 0.03 * s,
-                  fill=shade, width=1, tags=(tag, "cloud"))
-    c.create_line(x + 1.05 * s, base_y - 0.05 * s, x + 1.56 * s, base_y - 0.05 * s,
-                  fill=lit, width=1, tags=(tag, "cloud"))
 
 
 def _draw_crescent_moon(c, sx, sy, r, core):
@@ -662,7 +659,6 @@ def _draw_framing_trees(c, w, h, P, rng):
         ([w * 0.83, h * 0.155, w * 0.79, h * 0.205], 0.004),
         ([w * 0.964, h * 0.27, w * 0.90, h * 0.26, w * 0.85, h * 0.295], 0.006),
         ([w * 0.960, h * 0.68, w * 0.905, h * 0.64, w * 0.865, h * 0.655], 0.006),
-        ([w * 0.955, h * 0.73, w * 0.90, h * 0.78], 0.004),
     ]
     for pts, w_frac in limbs:
         lw_in = max(4, int(w * w_frac))
@@ -1236,63 +1232,61 @@ def draw_landscape(c, w, h, theme, mode="forest", richness=0.0):
             if j < 2:
                 S["shimmer"].append([iid, P["water"][1], P["water"][0], rng.uniform(0, 6.28), -1])
 
-    # ── 10. Winding dirt path + sky puddles + cross-hatched verge shading ──
-    if study:
-        p_far = hz + 0.17 * h
-
-        def path_xw(t):
-            return w * (0.30 + 0.30 * t - 0.06 * math.sin(t * math.pi * 2.0)), w * (0.070 * (1 - t) ** 1.3 + 0.004)
-    else:
+    # ── 10. Winding dirt path (forest view only; study meadow flows uninterrupted) ──
+    pf, pe, ph = P["path"]
+    if not study:
         p_far = hz + 0.10 * h
 
         def path_xw(t):
             return w * (0.42 + 0.10 * math.sin(t * math.pi * 1.4 + 0.3) - 0.05 * t), w * (0.075 * (1 - t) ** 1.4 + 0.004)
 
-    def path_fn(y):
-        if y < p_far or y > h:
+        def path_fn(y):
+            if y < p_far or y > h:
+                return None
+            return path_xw((h - y) / (h - p_far))
+        S["path"] = path_fn
+
+        left, right, centre = [], [], []
+        for i in range(13):
+            t = i / 12.0
+            y = h - t * (h - p_far)
+            xc, hw = path_xw(t)
+            left.extend([xc - hw, y])
+            right[:0] = [xc + hw, y]
+            if t < 0.75:
+                centre.extend([xc - hw * 0.15, y])
+        c.create_polygon([left[0], h + 4] + left + right + [right[-2], h + 4],
+                         fill=pf, outline=pe, width=2, smooth=True)
+        c.create_line(centre, fill=ph, width=max(1, int(2 * sc)), smooth=True)
+
+        hatch_path_col = mix(P["hatch"], pe, 0.35)
+        for t in (0.14, 0.28, 0.44):
+            py = h - t * (h - p_far)
+            xc, hw = path_xw(t)
+            _draw_cross_hatch(c, xc - hw - 10 * sc, py, 16, 3, hatch_path_col, spacing=4.5 * sc)
+            _draw_cross_hatch(c, xc + hw - 2 * sc, py + 2, 16, 3, hatch_path_col, spacing=4.5 * sc)
+
+        puddle = mix(sky_at(hz * 0.6), pf, 0.15)
+        for t in (0.12, 0.30, 0.52):
+            y = h - t * (h - p_far)
+            xc, hw = path_xw(t)
+            pw, phh = hw * 0.52, max(2, hw * 0.11)
+            ox = hw * 0.15 * (1 if t != 0.30 else -1)
+            c.create_polygon(
+                xc + ox - pw, y,
+                xc + ox - pw * 0.4, y - phh,
+                xc + ox + pw * 0.55, y - phh * 0.8,
+                xc + ox + pw, y + phh * 0.2,
+                xc + ox + pw * 0.3, y + phh,
+                xc + ox - pw * 0.5, y + phh * 0.75,
+                fill=puddle, outline=pe, smooth=True,
+            )
+            c.create_line(xc + ox - pw * 0.45, y - phh * 0.2, xc + ox + pw * 0.15, y - phh * 0.2,
+                          fill=mix(puddle, "#FFFFFF", 0.45), width=1)
+    else:
+        def path_fn(y):
             return None
-        return path_xw((h - y) / (h - p_far))
-    S["path"] = path_fn
-
-    pf, pe, ph = P["path"]
-    left, right, centre = [], [], []
-    for i in range(13):
-        t = i / 12.0
-        y = h - t * (h - p_far)
-        xc, hw = path_xw(t)
-        left.extend([xc - hw, y])
-        right[:0] = [xc + hw, y]
-        if t < 0.75:
-            centre.extend([xc - hw * 0.15, y])
-    c.create_polygon([left[0], h + 4] + left + right + [right[-2], h + 4],
-                     fill=pf, outline=pe, width=2, smooth=True)
-    c.create_line(centre, fill=ph, width=max(1, int(2 * sc)), smooth=True)
-
-    # Cross-hatched shading along the winding dirt path edges
-    hatch_path_col = mix(P["hatch"], pe, 0.35)
-    for t in (0.14, 0.28, 0.44):
-        py = h - t * (h - p_far)
-        xc, hw = path_xw(t)
-        _draw_cross_hatch(c, xc - hw - 10 * sc, py, 16, 3, hatch_path_col, spacing=4.5 * sc)
-        _draw_cross_hatch(c, xc + hw - 2 * sc, py + 2, 16, 3, hatch_path_col, spacing=4.5 * sc)
-
-    puddle = mix(sky_at(hz * 0.6), pf, 0.15)
-    for t in (0.12, 0.30, 0.52):
-        y = h - t * (h - p_far)
-        xc, hw = path_xw(t)
-        pw, phh = hw * 0.52, max(2, hw * 0.11)
-        ox = hw * 0.15 * (1 if t != 0.30 else -1)
-        c.create_polygon(
-            xc + ox - pw, y,
-            xc + ox - pw * 0.4, y - phh,
-            xc + ox + pw * 0.55, y - phh * 0.8,
-            xc + ox + pw, y + phh * 0.2,
-            xc + ox + pw * 0.3, y + phh,
-            xc + ox - pw * 0.5, y + phh * 0.75,
-            fill=puddle, outline=pe, smooth=True,
-        )
-        c.create_line(xc + ox - pw * 0.45, y - phh * 0.2, xc + ox + pw * 0.15, y - phh * 0.2,
-                      fill=mix(puddle, "#FFFFFF", 0.45), width=1)
+        S["path"] = path_fn
 
     def blocked(x, y, pad=0.0):
         pr = path_fn(y)
@@ -1313,14 +1307,14 @@ def draw_landscape(c, w, h, theme, mode="forest", richness=0.0):
         return False
     S["blocked"] = blocked
 
-    # ── 11. Central study planting mound + framing trees ──
-    gx, gy = 0.5 * w, near_fn(0.5 * w) + 0.075 * h
+    # ── 11. Centered study planting mound + framing trees ──
+    gx, gy = 0.5 * w, near_fn(0.5 * w) + (0.080 * h if study else 0.075 * h)
     S["study_ground"] = (gx, gy)
     if study:
-        mw = max(32.0, 0.068 * w)
-        mh = max(8.0, 0.018 * h)
-        knoll_shade = mix(pf, P["grass"], 0.55)
-        # Soft natural knoll blend behind the stone-ringed garden plot (no harsh dark ink outline or floating rim)
+        mw = max(34.0, 0.074 * w)
+        mh = max(9.0, 0.020 * h)
+        knoll_shade = mix(pf, P["grass"], 0.62)
+        # Soft natural knoll blend behind the centered garden plot
         c.create_polygon(
             gx - mw, gy + 2,
             gx - mw * 0.65, gy - mh * 0.75,
@@ -1331,8 +1325,8 @@ def draw_landscape(c, w, h, theme, mode="forest", richness=0.0):
             gx - mw * 0.55, gy + mh * 0.75,
             fill=knoll_shade, outline="", smooth=True, tags=("mound",),
         )
-        _draw_fern(c, gx - mw * 1.05, gy + 2, 10.5 * sc, P, dir_x=-1)
-        _draw_fern(c, gx + mw * 1.05, gy + 2, 10.0 * sc, P, dir_x=1)
+        _draw_fern(c, gx - mw * 1.08, gy + 2, 10.5 * sc, P, dir_x=-1)
+        _draw_fern(c, gx + mw * 1.08, gy + 2, 10.0 * sc, P, dir_x=1)
 
     _draw_framing_trees(c, w, h, P, rng)
 
@@ -1342,10 +1336,11 @@ def draw_landscape(c, w, h, theme, mode="forest", richness=0.0):
             y = hz + 0.122 * h + (h - hz - 0.122 * h) * t
             xc, hw = river_fn(y)
             _draw_pebble_cluster(c, xc + side * (hw + s * sc * 1.3), y, s * sc, P)
-    for t, side, s in ((0.20, 1, 7), (0.45, -1, 5)):
-        y = h - t * (h - p_far)
-        xc, hw = path_xw(t)
-        _draw_pebble_cluster(c, xc + side * (hw + s * sc * 1.5), y, s * sc, P)
+    if not study:
+        for t, side, s in ((0.20, 1, 7), (0.45, -1, 5)):
+            y = h - t * (h - p_far)
+            xc, hw = path_xw(t)
+            _draw_pebble_cluster(c, xc + side * (hw + s * sc * 1.5), y, s * sc, P)
 
     # ── 13. Foreground serrated bushes & ferns ──
     bs = 0.072 * h

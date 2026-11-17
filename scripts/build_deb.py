@@ -15,7 +15,7 @@ import tarfile
 import time
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = "1.0.3"
+VERSION = "2.0.0"
 PKG_NAME = "grow-your-forest"
 PKG_ARCH = "all"
 DEB_FILENAME = f"{PKG_NAME}_{VERSION}_{PKG_ARCH}.deb"
@@ -128,16 +128,17 @@ Section: utils
 Priority: optional
 Architecture: {PKG_ARCH}
 Installed-Size: {installed_size}
-Depends: python3 (>= 3.8), python3-tk, alsa-utils | pulseaudio-utils | mpv | ffmpeg
+Depends: python3 (>= 3.8), python3-tk, pulseaudio-utils | pipewire-bin | alsa-utils | mpv | ffmpeg
 Maintainer: Trinh Duc Minh <minhtrinhduc4@gmail.com>
 Homepage: https://github.com/minh-inthenature/grow-your-forest
 Description: Cozy desktop focus timer with ambient rain and forest sanctuary
  Grow Your Forest is a cozy desktop focus timer built with Python & Tkinter.
- Complete study/focus sessions to grow distinct trees (Cherry Blossom, Pine,
- Angel Oak, Classic Oak) across a layered 2D forest sanctuary with ambient
- rain sound and four atmospheric themes: Morning, Afternoon, Night, and Chill.
- Features local SQLite progress tracking, focus statistics, achievements,
- and smooth theme transitions.
+ Complete study/focus sessions to grow 7 distinct trees (Cherry Blossom, Pine,
+ Angel Oak, Classic Oak, Weeping Willow, Japanese Maple, Moonlit Blossom) across
+ a layered 2D forest sanctuary with ambient rain sound and four atmospheric
+ themes: Morning, Afternoon, Night, and Chill.
+ Features Daily Challenges, Seed Bag progression, local SQLite tracking,
+ focus statistics, achievements, and smooth theme transitions.
 """
     with open(os.path.join(debian_dir, "control"), "w", encoding="utf-8", newline="\n") as f:
         f.write(control_content)
